@@ -20,6 +20,8 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install flet
+          # السحر هنا: تنزيل yt-dlp ككود صافي بجوار التطبيق
+          pip install yt-dlp --no-deps -t .
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -30,20 +32,19 @@ jobs:
       - name: Setup Flutter SDK
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.24.0' # إصدار مستقر وحديث يتوافق مع متطلبات flet
+          flutter-version: '3.24.0'
           channel: 'stable'
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
       - name: Build APK
+        # تم مسح الكلمة الغلط والإبقاء على التتبع المفصل -v فقط
         run: |
-          # استخدام --no-interactive لتجنب أي مطالبات يدوية
-          # استخدام -v للتتبع المفصل
-          flet build apk -v --no-interactive
+          flet build apk -v
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: R-plus-apk
-          path: build/apk/*.apk
+          path: build/apk/**/*.apk
