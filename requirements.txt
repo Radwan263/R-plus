@@ -1,3 +1,5 @@
+flet
 urllib3
 certifi
 mutagen
+pycryptodomex

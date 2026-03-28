@@ -1,42 +1,43 @@
-name: Build Android APK
+name: Build Flet Android APK
+
 on:
+  push:
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
+      - name: Install Flet and Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install flet
+
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
-          distribution: 'zulu'
+          distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          channel: 'stable'
-
-      - name: Prepare Flet and yt-dlp Source
-        run: |
-          pip install flet
-          # هنا السحر: تحميل yt-dlp ككود صافي بجوار التطبيق لمنع انهيار البناء
-          pip install yt-dlp --no-deps -t .
-          pip install -r requirements.txt
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
 
       - name: Build APK
-        run: flet build apk
+        run: |
+          # استخدام -v للتتبع المفصل (Verbose)
+          # استخدام --include-packages لضمان تضمين flet وتبعياتها
+          flet build apk -v --include-packages flet,urllib3,certifi,mutagen,pycryptodomex
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: R-Cima-Plus-APK
-          path: build/apk/**/*.apk
+          name: R-plus-apk
+          path: build/apk/*.apk

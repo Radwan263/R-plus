@@ -1,7 +1,17 @@
 import flet as ft
-import yt_dlp
 import os
 import threading
+import sys
+
+# محاولة استيراد yt_dlp من الملف المحلي أو من المكتبة المثبتة
+try:
+    import yt_dlp_file as yt_dlp
+except ImportError:
+    try:
+        import yt_dlp
+    except ImportError:
+        # في حالة الفشل التام (لن يحدث إذا تم تضمين الملف)
+        yt_dlp = None
 
 def main(page: ft.Page):
     # إعدادات الواجهة
@@ -22,14 +32,22 @@ def main(page: ft.Page):
 
     # دالة البحث
     def do_search(query):
+        if yt_dlp is None:
+            show_msg("خطأ: مكتبة التحميل غير متوفرة!", ft.colors.RED_700)
+            return
+            
         try:
             is_url = query.startswith("http")
             sq = query if is_url else f"ytsearch5:{query}"
-            ydl_opts = {'quiet': True, 'extract_flat': True}
+            ydl_opts = {'quiet': True, 'extract_flat': True, 'no_warnings': True}
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(sq, download=False)
                 entries = [info] if is_url else info.get('entries', [])
+
+                if not entries:
+                    show_msg("لم يتم العثور على نتائج.", ft.colors.ORANGE_700)
+                    return
 
                 for e in entries:
                     if not e: continue
@@ -55,7 +73,7 @@ def main(page: ft.Page):
                     results_col.controls.append(card)
             show_msg("تم جلب النتائج بنجاح! 🎉", ft.colors.GREEN_700)
         except Exception as ex:
-            show_msg("حدث خطأ، تأكد من الرابط أو الإنترنت.", ft.colors.RED_700)
+            show_msg(f"حدث خطأ: {str(ex)[:50]}", ft.colors.RED_700)
         page.update()
 
     def search_btn_click(e):
@@ -70,23 +88,30 @@ def main(page: ft.Page):
     # دالة التحميل
     def dl_logic(url, type):
         try:
-            # مسار التنزيلات العام في الأندرويد
-            path = "/storage/emulated/0/Download"
+            # محاولة تحديد مسار التحميل في أندرويد
+            if os.name == 'posix' and hasattr(sys, 'getandroidapilevel'):
+                # نحن على أندرويد
+                path = "/storage/emulated/0/Download"
+            else:
+                path = os.path.join(os.path.expanduser("~"), "Downloads")
+                
             if not os.path.exists(path):
-                path = os.path.expanduser("~/Downloads")
+                try:
+                    os.makedirs(path, exist_ok=True)
+                except:
+                    path = "." # العودة للمجلد الحالي إذا فشل كل شيء
             
             ydl_opts = {
                 'outtmpl': f'{path}/%(title)s.%(ext)s',
                 'quiet': True,
                 'no_warnings': True,
-                # جلب الصيغ المباشرة لتجنب مشاكل التحويل
                 'format': 'bestaudio[ext=m4a]/bestaudio' if type == 'audio' else 'best[ext=mp4]/best'
             }
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([url])
-            show_msg("تم التحميل بنجاح في مجلد Downloads! ✅", ft.colors.GREEN_700)
+            show_msg(f"تم التحميل بنجاح في: {path} ✅", ft.colors.GREEN_700)
         except Exception as ex:
-            show_msg("حدث خطأ أثناء التحميل ❌", ft.colors.RED_700)
+            show_msg(f"خطأ في التحميل: {str(ex)[:50]}", ft.colors.RED_700)
 
     def start_dl(url, type):
         show_msg("بدأ التحميل في الخلفية... يرجى الانتظار ⏳", ft.colors.BLUE_700)
