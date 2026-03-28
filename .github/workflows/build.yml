@@ -1,6 +1,6 @@
 name: Build Android APK
 on:
-  workflow_dispatch: # زرار التشغيل اليدوي
+  workflow_dispatch:
 
 jobs:
   build:
@@ -25,9 +25,11 @@ jobs:
         with:
           channel: 'stable'
 
-      - name: Install Flet and Requirements
+      - name: Prepare Flet and yt-dlp Source
         run: |
           pip install flet
+          # هنا السحر: تحميل yt-dlp ككود صافي بجوار التطبيق لمنع انهيار البناء
+          pip install yt-dlp --no-deps -t .
           pip install -r requirements.txt
 
       - name: Build APK
