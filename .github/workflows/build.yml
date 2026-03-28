@@ -33,8 +33,7 @@ jobs:
       - name: Build APK
         run: |
           # استخدام -v للتتبع المفصل (Verbose)
-          # استخدام --include-packages لضمان تضمين flet وتبعياتها
-          flet build apk -v --include-packages flet,urllib3,certifi,mutagen,pycryptodomex
+          flet build apk -v
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
