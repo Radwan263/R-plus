@@ -30,7 +30,7 @@ jobs:
       - name: Setup Flutter SDK
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.19.0' # يمكنك تحديد إصدار Flutter المطلوب هنا
+          flutter-version: '3.24.0' # إصدار مستقر وحديث يتوافق مع متطلبات flet
           channel: 'stable'
 
       - name: Setup Android SDK
@@ -38,9 +38,9 @@ jobs:
 
       - name: Build APK
         run: |
-          # استخدام -v للتتبع المفصل (Verbose)
-          # Flet سيكتشف Flutter SDK المثبت مسبقاً ولن يطلب تثبيته تفاعلياً
-          flet build apk -v
+          # استخدام --no-interactive لتجنب أي مطالبات يدوية
+          # استخدام -v للتتبع المفصل
+          flet build apk -v --no-interactive
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
