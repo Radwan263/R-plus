@@ -39,9 +39,9 @@ jobs:
         uses: android-actions/setup-android@v3
 
       - name: Build APK
-        # تم مسح الكلمة الغلط والإبقاء على التتبع المفصل -v فقط
         run: |
-          flet build apk -v
+          yes | flet build apk -v
+
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
