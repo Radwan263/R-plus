@@ -1,4 +1,4 @@
-Enterimport 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 
 void main() {
   runApp(const RCimaApp());
@@ -15,12 +15,12 @@ class RCimaApp extends StatelessWidget {
       theme: ThemeData(
         brightness: Brightness.dark,
         primarySwatch: Colors.blue,
-        scaffoldBackgroundColor: const Color(0xFF121212), // لون خلفية داكن فخم
+        scaffoldBackgroundColor: const Color(0xFF121212),
         useMaterial3: true,
       ),
       builder: (context, child) {
         return Directionality(
-          textDirection: TextDirection.rtl, // دعم العربية من اليمين لليسار
+          textDirection: TextDirection.rtl, 
           child: child!,
         );
       },
@@ -39,7 +39,6 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   final TextEditingController _urlController = TextEditingController();
 
-  // دالة إظهار نافذة التحميل السفلية (زي IDM+ بالضبط)
   void _showDownloadSheet() {
     showModalBottomSheet(
       context: context,
@@ -55,7 +54,6 @@ class _HomePageState extends State<HomePage> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // الشرطة الرمادية اللي فوق
               Center(
                 child: Container(
                   width: 40,
@@ -72,7 +70,6 @@ class _HomePageState extends State<HomePage> {
                 style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 15),
-              // كارت معلومات الفيديو
               Row(
                 children: [
                   const Icon(Icons.video_file, size: 45, color: Colors.blueAccent),
@@ -82,7 +79,7 @@ class _HomePageState extends State<HomePage> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         const Text(
-                          "مسلسل ليل الحلقة 43 - عرب سيد", // اسم تجريبي زي صورتك
+                          "مسلسل ليل الحلقة 43 - عرب سيد", 
                           style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
@@ -102,7 +99,6 @@ class _HomePageState extends State<HomePage> {
               const SizedBox(height: 10),
               const Text("اختر الجودة:", style: TextStyle(fontWeight: FontWeight.bold)),
               const SizedBox(height: 15),
-              // أزرار الجودات
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                 children: [
@@ -113,13 +109,12 @@ class _HomePageState extends State<HomePage> {
                 ],
               ),
               const SizedBox(height: 30),
-              // زرار البدء
               SizedBox(
                 width: double.infinity,
                 height: 50,
                 child: ElevatedButton.icon(
                   onPressed: () {
-                    Navigator.pop(context); // قفل النافذة
+                    Navigator.pop(context); 
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(content: Text("جاري تجهيز التحميل في الخلفية...")),
                     );
@@ -143,13 +138,12 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // تصميم زرار الجودة
   Widget _qualityChip(String label, Color color) {
     return ActionChip(
       label: Text(label, style: const TextStyle(fontWeight: FontWeight.bold)),
       backgroundColor: color.withOpacity(0.15),
       side: BorderSide(color: color, width: 1.5),
-      onPressed: () {}, // هنبرمجها بعدين
+      onPressed: () {}, 
     );
   }
 
@@ -211,3 +205,4 @@ class _HomePageState extends State<HomePage> {
     );
   }
 }
+
