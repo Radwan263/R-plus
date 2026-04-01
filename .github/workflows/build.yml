@@ -1,7 +1,7 @@
 name: Build Flutter APK
 
 on:
-  workflow_dispatch: # زر التشغيل اليدوي
+  workflow_dispatch:
 
 jobs:
   build:
@@ -21,6 +21,9 @@ jobs:
         with:
           channel: 'stable'
 
+      - name: Generate Android structure
+        run: flutter create .
+
       - name: Install Dependencies
         run: flutter pub get
 
@@ -31,5 +34,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: RCima-Downloader-APK
-          path: build/app/outputs/flutter-apk/app-release.apk
-
+          path: build/app/outputs/flutter-apk/release/app-release.apk
