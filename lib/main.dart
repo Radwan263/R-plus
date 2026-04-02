@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart' as yt;
 import 'package:http/http.dart' as http;
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
   runApp(const RCimaApp());
 }
 
@@ -15,7 +15,12 @@ class RCimaApp extends StatelessWidget {
     return MaterialApp(
       title: 'R Cima Downloader',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(brightness: Brightness.dark, primarySwatch: Colors.blue, scaffoldBackgroundColor: const Color(0xFF121212), useMaterial3: true),
+      theme: ThemeData(
+        brightness: Brightness.dark,
+        primarySwatch: Colors.blue,
+        scaffoldBackgroundColor: const Color(0xFF121212),
+        useMaterial3: true,
+      ),
       builder: (context, child) => Directionality(textDirection: TextDirection.rtl, child: child!),
       home: const MainScreen(),
     );
@@ -30,8 +35,6 @@ class MainScreen extends StatefulWidget {
 
 class _MainScreenState extends State<MainScreen> {
   int _selectedIndex = 0;
-  String lastAnalyzedTitle = "جاري التحليل...";
-  String lastAnalyzedSize = "0 MB";
   
   @override
   Widget build(BuildContext context) {
@@ -59,7 +62,7 @@ class _MainScreenState extends State<MainScreen> {
 }
 
 // ----------------------------------------------------
-// شاشة الرئيسية مع محرك التحليل الذكي
+// شاشة الرئيسية
 // ----------------------------------------------------
 class HomePage extends StatefulWidget {
   final VoidCallback onDownloadStarted;
@@ -72,7 +75,6 @@ class _HomePageState extends State<HomePage> {
   final TextEditingController _urlController = TextEditingController();
   bool _isLoading = false;
 
-  // المحرك الذكي لتحليل الروابط
   Future<void> _analyzeUrl(String url) async {
     if (url.isEmpty) return;
     setState(() => _isLoading = true);
@@ -88,27 +90,16 @@ class _HomePageState extends State<HomePage> {
         } finally {
           ytInstance.close();
         }
-      } else if (url.contains("facebook.com") || url.contains("fb.watch")) {
-        // محاكاة تحليل فيسبوك (يتطلب عادة API أو كشط للبيانات)
-        // سنحاول الحصول على معلومات الرأس كبداية
+      } else {
         final response = await http.head(Uri.parse(url), headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         });
         final sizeBytes = int.tryParse(response.headers['content-length'] ?? "0") ?? 0;
         final sizeMB = (sizeBytes / (1024 * 1024)).toStringAsFixed(2);
-        _showDownloadSheet("فيديو فيسبوك", sizeBytes > 0 ? "$sizeMB MB" : "غير معروف", isYoutube: false);
-      } else {
-        // للمواقع الأخرى وروابط المباشرة
-        final response = await http.head(Uri.parse(url));
-        final sizeBytes = int.tryParse(response.headers['content-length'] ?? "0") ?? 0;
-        final sizeMB = (sizeBytes / (1024 * 1024)).toStringAsFixed(2);
         _showDownloadSheet("ملف مكتشف", sizeBytes > 0 ? "$sizeMB MB" : "رابط مباشر", isYoutube: false);
       }
     } catch (e) {
-      debugPrint("Error analyzing URL: $e");
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("فشل التحليل: تأكد من الرابط أو اتصالك بالإنترنت"))
-      );
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("فشل التحليل: تأكد من الرابط")));
     } finally {
       setState(() => _isLoading = false);
     }
@@ -161,13 +152,19 @@ class _HomePageState extends State<HomePage> {
               const SizedBox(height: 30),
               TextField(
                 controller: _urlController,
-                decoration: InputDecoration(hintText: "الزق الرابط هنا...", border: OutlineInputBorder(borderRadius: BorderRadius.circular(15))),
+                decoration: InputDecoration(
+                  hintText: "الزق الرابط هنا...",
+                  prefixIcon: const Icon(Icons.link),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(15)),
+                ),
               ),
               const SizedBox(height: 20),
               if (_isLoading) const CircularProgressIndicator()
-              else ElevatedButton(
+              else ElevatedButton.icon(
                 onPressed: () => _analyzeUrl(_urlController.text),
-                child: const Text("تحليل الرابط الذكي"),
+                icon: const Icon(Icons.analytics_outlined),
+                label: const Text("تحليل الرابط الذكي"),
+                style: ElevatedButton.styleFrom(minimumSize: const Size(200, 50)),
               ),
             ],
           ),
@@ -178,7 +175,7 @@ class _HomePageState extends State<HomePage> {
 }
 
 // ----------------------------------------------------
-// شاشة المتصفح المحسنة
+// شاشة المتصفح المتكامل (Integrated Browser)
 // ----------------------------------------------------
 class BrowserPage extends StatefulWidget {
   const BrowserPage({super.key});
@@ -188,15 +185,37 @@ class BrowserPage extends StatefulWidget {
 
 class _BrowserPageState extends State<BrowserPage> {
   InAppWebViewController? webViewController;
-  double progress = 0;
-  bool isError = false;
+  final TextEditingController _addressController = TextEditingController(text: "https://www.google.com");
+  double _progress = 0;
+  bool _canGoBack = false;
+  bool _canGoForward = false;
+  String? _detectedVideoUrl;
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text("المتصفح الذكي"),
         backgroundColor: const Color(0xFF1E1E1E),
+        titleSpacing: 0,
+        title: Container(
+          height: 40,
+          margin: const EdgeInsets.symmetric(horizontal: 10),
+          decoration: BoxDecoration(color: Colors.black26, borderRadius: BorderRadius.circular(20)),
+          child: TextField(
+            controller: _addressController,
+            decoration: const InputDecoration(
+              hintText: "ابحث أو أدخل عنواناً",
+              border: InputBorder.none,
+              prefixIcon: Icon(Icons.search, size: 20),
+              contentPadding: EdgeInsets.symmetric(vertical: 10),
+            ),
+            onSubmitted: (value) {
+              var url = value;
+              if (!url.startsWith("http")) url = "https://www.google.com/search?q=$url";
+              webViewController?.loadUrl(urlRequest: URLRequest(url: WebUri(url)));
+            },
+          ),
+        ),
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
@@ -206,53 +225,115 @@ class _BrowserPageState extends State<BrowserPage> {
       ),
       body: Column(
         children: [
-          if (progress < 1.0)
-            LinearProgressIndicator(value: progress, backgroundColor: Colors.transparent, color: Colors.blueAccent),
+          if (_progress < 1.0)
+            LinearProgressIndicator(value: _progress, backgroundColor: Colors.transparent, color: Colors.blueAccent),
           Expanded(
             child: Stack(
               children: [
                 InAppWebView(
                   initialUrlRequest: URLRequest(url: WebUri("https://www.google.com")),
-                  onWebViewCreated: (controller) => webViewController = controller,
                   initialSettings: InAppWebViewSettings(
                     javaScriptEnabled: true,
                     allowsInlineMediaPlayback: true,
-                    useShouldOverrideUrlLoading: true,
+                    useShouldInterceptAjaxRequest: true,
+                    useShouldInterceptFetchRequest: true,
                     mediaPlaybackRequiresUserGesture: false,
-                    transparentBackground: true, // قد يساعد في حل مشكلة الشاشة السوداء
+                    transparentBackground: true,
+                    // إعدادات أندرويد المتقدمة لحل الشاشة السوداء
+                    hardwareAcceleration: true,
+                    mixedContentMode: MixedContentMode.MIXED_CONTENT_ALWAYS_ALLOW,
+                    useWideViewPort: true,
+                    loadWithOverviewMode: true,
+                    // إعدادات iOS
+                    allowsBackForwardNavigationGestures: true,
                   ),
+                  onWebViewCreated: (controller) => webViewController = controller,
+                  onLoadStart: (controller, url) {
+                    setState(() {
+                      _addressController.text = url.toString();
+                      _detectedVideoUrl = null;
+                    });
+                  },
+                  onLoadStop: (controller, url) async {
+                    setState(() {
+                      _addressController.text = url.toString();
+                    });
+                    _checkHistory();
+                  },
                   onProgressChanged: (controller, progress) {
-                    setState(() => this.progress = progress / 100);
+                    setState(() => _progress = progress / 100);
                   },
-                  onReceivedError: (controller, request, error) {
-                    setState(() => isError = true);
-                    debugPrint("WebView Error: ${error.description}");
-                  },
-                  onLoadStop: (controller, url) {
-                    setState(() => isError = false);
+                  // منطق كشف الفيديوهات (Video Sniffer)
+                  onLoadResource: (controller, resource) {
+                    final url = resource.url.toString();
+                    // كشف روابط الفيديو المباشرة والتحويلات
+                    if (url.contains(".mp4") || 
+                        url.contains(".m3u8") || 
+                        url.contains("video_redirect") || 
+                        url.contains("fbcdn.net") || // روابط فيسبوك
+                        url.contains("tiktokcdn.com") || // روابط تيك توك
+                        url.contains("googlevideo.com")) { // روابط يوتيوب (أحياناً تظهر هنا)
+                      setState(() => _detectedVideoUrl = url);
+                    }
                   },
                 ),
-                if (isError)
-                  Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const Icon(Icons.error_outline, size: 50, color: Colors.red),
-                        const SizedBox(height: 10),
-                        const Text("فشل تحميل الصفحة"),
-                        ElevatedButton(
-                          onPressed: () => webViewController?.reload(),
-                          child: const Text("إعادة المحاولة"),
-                        )
-                      ],
+                if (_detectedVideoUrl != null)
+                  Positioned(
+                    bottom: 20,
+                    right: 20,
+                    child: FloatingActionButton(
+                      backgroundColor: Colors.redAccent,
+                      child: const Icon(Icons.download, color: Colors.white),
+                      onPressed: () {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text("تم كشف فيديو! جاري التحضير...")),
+                        );
+                      },
                     ),
                   ),
+              ],
+            ),
+          ),
+          // شريط أدوات المتصفح السفلي
+          Container(
+            height: 50,
+            color: const Color(0xFF1E1E1E),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                IconButton(
+                  icon: Icon(Icons.arrow_back, color: _canGoBack ? Colors.white : Colors.grey),
+                  onPressed: _canGoBack ? () => webViewController?.goBack() : null,
+                ),
+                IconButton(
+                  icon: Icon(Icons.arrow_forward, color: _canGoForward ? Colors.white : Colors.grey),
+                  onPressed: _canGoForward ? () => webViewController?.goForward() : null,
+                ),
+                IconButton(
+                  icon: const Icon(Icons.home),
+                  onPressed: () => webViewController?.loadUrl(urlRequest: URLRequest(url: WebUri("https://www.google.com"))),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.share),
+                  onPressed: () {},
+                ),
               ],
             ),
           ),
         ],
       ),
     );
+  }
+
+  Future<void> _checkHistory() async {
+    if (webViewController != null) {
+      bool canBack = await webViewController!.canGoBack();
+      bool canForward = await webViewController!.canGoForward();
+      setState(() {
+        _canGoBack = canBack;
+        _canGoForward = canForward;
+      });
+    }
   }
 }
 
@@ -261,4 +342,3 @@ class DownloadsPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) => const Scaffold(body: Center(child: Text("قائمة التحميلات تظهر هنا")));
 }
-
