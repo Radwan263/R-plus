@@ -3,8 +3,12 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart' as yt;
 import 'package:http/http.dart' as http;
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // تفعيل إعدادات WebView المتقدمة للأندرويد
+  if (InAppWebViewHelper.isAndroid()) {
+    await InAppWebViewController.setWebContentsDebuggingEnabled(true);
+  }
   runApp(const RCimaApp());
 }
 
@@ -17,8 +21,8 @@ class RCimaApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         brightness: Brightness.dark,
-        primarySwatch: Colors.blue,
-        scaffoldBackgroundColor: const Color(0xFF121212),
+        primaryColor: Colors.blueAccent,
+        scaffoldBackgroundColor: const Color(0xFF0F0F0F),
         useMaterial3: true,
       ),
       builder: (context, child) => Directionality(textDirection: TextDirection.rtl, child: child!),
@@ -50,11 +54,12 @@ class _MainScreenState extends State<MainScreen> {
       bottomNavigationBar: NavigationBar(
         selectedIndex: _selectedIndex,
         onDestinationSelected: (index) => setState(() => _selectedIndex = index),
-        backgroundColor: const Color(0xFF1E1E1E),
+        backgroundColor: const Color(0xFF1A1A1A),
+        indicatorColor: Colors.blueAccent.withOpacity(0.2),
         destinations: const [
-          NavigationDestination(icon: Icon(Icons.home_outlined), label: 'الرئيسية'),
-          NavigationDestination(icon: Icon(Icons.travel_explore), label: 'المتصفح'),
-          NavigationDestination(icon: Icon(Icons.download_outlined), label: 'التحميلات'),
+          NavigationDestination(icon: Icon(Icons.home_outlined), selectedIcon: Icon(Icons.home, color: Colors.blueAccent), label: 'الرئيسية'),
+          NavigationDestination(icon: Icon(Icons.travel_explore), selectedIcon: Icon(Icons.explore, color: Colors.blueAccent), label: 'المتصفح'),
+          NavigationDestination(icon: Icon(Icons.download_outlined), selectedIcon: Icon(Icons.download, color: Colors.blueAccent), label: 'التحميلات'),
         ],
       ),
     );
@@ -62,7 +67,7 @@ class _MainScreenState extends State<MainScreen> {
 }
 
 // ----------------------------------------------------
-// شاشة الرئيسية
+// شاشة الرئيسية - محرك التحليل الذكي
 // ----------------------------------------------------
 class HomePage extends StatefulWidget {
   final VoidCallback onDownloadStarted;
@@ -79,10 +84,13 @@ class _HomePageState extends State<HomePage> {
     if (url.isEmpty) return;
     setState(() => _isLoading = true);
     try {
-      if (url.contains("youtube.com") || url.contains("youtu.be")) {
+      // تنظيف الرابط
+      final cleanUrl = url.trim();
+      
+      if (cleanUrl.contains("youtube.com") || cleanUrl.contains("youtu.be")) {
         final ytInstance = yt.YoutubeExplode();
         try {
-          final video = await ytInstance.videos.get(url);
+          final video = await ytInstance.videos.get(cleanUrl);
           final manifest = await ytInstance.videos.streamsClient.getManifest(video.id);
           final streamInfo = manifest.muxed.withHighestBitrate();
           final size = streamInfo.size.totalMegaBytes.toStringAsFixed(2);
@@ -91,15 +99,30 @@ class _HomePageState extends State<HomePage> {
           ytInstance.close();
         }
       } else {
-        final response = await http.head(Uri.parse(url), headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        // محرك تحليل عام للسوشيال ميديا (فيسبوك، تيك توك، إلخ)
+        final response = await http.head(Uri.parse(cleanUrl), headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36'
         });
+        
         final sizeBytes = int.tryParse(response.headers['content-length'] ?? "0") ?? 0;
         final sizeMB = (sizeBytes / (1024 * 1024)).toStringAsFixed(2);
-        _showDownloadSheet("ملف مكتشف", sizeBytes > 0 ? "$sizeMB MB" : "رابط مباشر", isYoutube: false);
+        final contentType = response.headers['content-type'] ?? "";
+        
+        if (sizeBytes > 0 || contentType.contains("video")) {
+          _showDownloadSheet("فيديو مكتشف", sizeBytes > 0 ? "$sizeMB MB" : "رابط مباشر", isYoutube: false);
+        } else {
+          throw Exception("لم يتم العثور على محتوى فيديو");
+        }
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("فشل التحليل: تأكد من الرابط")));
+      debugPrint("Analysis Error: $e");
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text("فشل التحليل: تأكد من الرابط أو جرب فتحه في المتصفح الداخلي"),
+          backgroundColor: Colors.redAccent,
+          behavior: SnackBarBehavior.floating,
+        )
+      );
     } finally {
       setState(() => _isLoading = false);
     }
@@ -107,29 +130,36 @@ class _HomePageState extends State<HomePage> {
 
   void _showDownloadSheet(String title, String size, {required bool isYoutube}) {
     showModalBottomSheet(
-      context: context, isScrollControlled: true, backgroundColor: const Color(0xFF1E1E1E),
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      context: context, isScrollControlled: true, backgroundColor: const Color(0xFF1A1A1A),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(25))),
       builder: (context) => Padding(
-        padding: const EdgeInsets.all(20.0),
+        padding: const EdgeInsets.all(24.0),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.grey[700], borderRadius: BorderRadius.circular(2))),
+            const SizedBox(height: 20),
             Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold), maxLines: 2, textAlign: TextAlign.center),
             const SizedBox(height: 10),
             Text("الحجم التقريبي: $size", style: TextStyle(color: Colors.grey[400])),
-            const SizedBox(height: 20),
+            const SizedBox(height: 25),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
-                if (isYoutube) _choiceChip("فيديو MP4", Icons.movie),
-                _choiceChip("صوت MP3", Icons.audiotrack),
+                if (isYoutube) _choiceChip("فيديو MP4", Icons.movie, Colors.blueAccent),
+                _choiceChip("صوت MP3", Icons.audiotrack, Colors.orangeAccent),
               ],
             ),
-            const SizedBox(height: 25),
+            const SizedBox(height: 30),
             ElevatedButton(
               onPressed: () { Navigator.pop(context); widget.onDownloadStarted(); },
-              style: ElevatedButton.styleFrom(minimumSize: const Size(double.infinity, 50), backgroundColor: Colors.blueAccent),
-              child: const Text("بدء التحميل الآن"),
+              style: ElevatedButton.styleFrom(
+                minimumSize: const Size(double.infinity, 55),
+                backgroundColor: Colors.blueAccent,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+                elevation: 0,
+              ),
+              child: const Text("بدء التحميل الآن", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white)),
             )
           ],
         ),
@@ -137,36 +167,64 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _choiceChip(String label, IconData icon) => Chip(avatar: Icon(icon, size: 16), label: Text(label));
+  Widget _choiceChip(String label, IconData icon, Color color) => Chip(
+    avatar: Icon(icon, size: 18, color: color),
+    label: Text(label),
+    backgroundColor: Colors.black26,
+    side: BorderSide(color: color.withOpacity(0.3)),
+  );
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(20.0),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Icon(Icons.cloud_download, size: 80, color: Colors.blueAccent),
-              const SizedBox(height: 30),
-              TextField(
-                controller: _urlController,
-                decoration: InputDecoration(
-                  hintText: "الزق الرابط هنا...",
-                  prefixIcon: const Icon(Icons.link),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(15)),
+      body: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [Colors.blueAccent.withOpacity(0.1), Colors.transparent],
+          ),
+        ),
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24.0),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.cloud_download_rounded, size: 100, color: Colors.blueAccent),
+                const SizedBox(height: 10),
+                const Text("R-Plus Downloader", style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, letterSpacing: 1.2)),
+                const Text("حمل فيديوهاتك المفضلة بسهولة", style: TextStyle(color: Colors.grey)),
+                const SizedBox(height: 40),
+                TextField(
+                  controller: _urlController,
+                  style: const TextStyle(fontSize: 14),
+                  decoration: InputDecoration(
+                    hintText: "الزق رابط الفيديو هنا...",
+                    prefixIcon: const Icon(Icons.link, color: Colors.blueAccent),
+                    filled: true,
+                    fillColor: Colors.black26,
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(20), borderSide: BorderSide.none),
+                    focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(20), borderSide: const BorderSide(color: Colors.blueAccent, width: 1)),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 20),
-              if (_isLoading) const CircularProgressIndicator()
-              else ElevatedButton.icon(
-                onPressed: () => _analyzeUrl(_urlController.text),
-                icon: const Icon(Icons.analytics_outlined),
-                label: const Text("تحليل الرابط الذكي"),
-                style: ElevatedButton.styleFrom(minimumSize: const Size(200, 50)),
-              ),
-            ],
+                const SizedBox(height: 25),
+                if (_isLoading) 
+                  const CircularProgressIndicator(color: Colors.blueAccent)
+                else 
+                  ElevatedButton.icon(
+                    onPressed: () => _analyzeUrl(_urlController.text),
+                    icon: const Icon(Icons.auto_awesome, size: 20),
+                    label: const Text("تحليل الرابط الذكي"),
+                    style: ElevatedButton.styleFrom(
+                      minimumSize: const Size(220, 55),
+                      backgroundColor: Colors.blueAccent,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+                    ),
+                  ),
+              ],
+            ),
           ),
         ),
       ),
@@ -195,38 +253,37 @@ class _BrowserPageState extends State<BrowserPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        backgroundColor: const Color(0xFF1E1E1E),
+        backgroundColor: const Color(0xFF1A1A1A),
+        elevation: 0,
         titleSpacing: 0,
         title: Container(
-          height: 40,
-          margin: const EdgeInsets.symmetric(horizontal: 10),
-          decoration: BoxDecoration(color: Colors.black26, borderRadius: BorderRadius.circular(20)),
+          height: 42,
+          margin: const EdgeInsets.symmetric(horizontal: 12),
+          decoration: BoxDecoration(color: Colors.black, borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.white10)),
           child: TextField(
             controller: _addressController,
+            style: const TextStyle(fontSize: 13),
             decoration: const InputDecoration(
-              hintText: "ابحث أو أدخل عنواناً",
+              hintText: "ابحث أو أدخل عنواناً...",
               border: InputBorder.none,
-              prefixIcon: Icon(Icons.search, size: 20),
+              prefixIcon: Icon(Icons.search, size: 18, color: Colors.grey),
               contentPadding: EdgeInsets.symmetric(vertical: 10),
             ),
             onSubmitted: (value) {
-              var url = value;
+              var url = value.trim();
               if (!url.startsWith("http")) url = "https://www.google.com/search?q=$url";
               webViewController?.loadUrl(urlRequest: URLRequest(url: WebUri(url)));
             },
           ),
         ),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: () => webViewController?.reload(),
-          ),
+          IconButton(icon: const Icon(Icons.refresh, size: 20), onPressed: () => webViewController?.reload()),
         ],
       ),
       body: Column(
         children: [
           if (_progress < 1.0)
-            LinearProgressIndicator(value: _progress, backgroundColor: Colors.transparent, color: Colors.blueAccent),
+            LinearProgressIndicator(value: _progress, backgroundColor: Colors.transparent, color: Colors.blueAccent, minHeight: 2),
           Expanded(
             child: Stack(
               children: [
@@ -238,14 +295,9 @@ class _BrowserPageState extends State<BrowserPage> {
                     useShouldInterceptAjaxRequest: true,
                     useShouldInterceptFetchRequest: true,
                     mediaPlaybackRequiresUserGesture: false,
-                    transparentBackground: true,
-                    // إعدادات أندرويد المتقدمة لحل الشاشة السوداء
+                    transparentBackground: false, // تغيير لضمان عدم ظهور شاشة سوداء
                     hardwareAcceleration: true,
-                    mixedContentMode: MixedContentMode.MIXED_CONTENT_ALWAYS_ALLOW,
-                    useWideViewPort: true,
-                    loadWithOverviewMode: true,
-                    // إعدادات iOS
-                    allowsBackForwardNavigationGestures: true,
+                    safeBrowsingEnabled: true,
                   ),
                   onWebViewCreated: (controller) => webViewController = controller,
                   onLoadStart: (controller, url) {
@@ -255,38 +307,30 @@ class _BrowserPageState extends State<BrowserPage> {
                     });
                   },
                   onLoadStop: (controller, url) async {
-                    setState(() {
-                      _addressController.text = url.toString();
-                    });
+                    setState(() => _addressController.text = url.toString());
                     _checkHistory();
                   },
                   onProgressChanged: (controller, progress) {
                     setState(() => _progress = progress / 100);
                   },
-                  // منطق كشف الفيديوهات (Video Sniffer)
                   onLoadResource: (controller, resource) {
                     final url = resource.url.toString();
-                    // كشف روابط الفيديو المباشرة والتحويلات
-                    if (url.contains(".mp4") || 
-                        url.contains(".m3u8") || 
-                        url.contains("video_redirect") || 
-                        url.contains("fbcdn.net") || // روابط فيسبوك
-                        url.contains("tiktokcdn.com") || // روابط تيك توك
-                        url.contains("googlevideo.com")) { // روابط يوتيوب (أحياناً تظهر هنا)
+                    if (url.contains(".mp4") || url.contains(".m3u8") || url.contains("fbcdn.net") || url.contains("googlevideo.com")) {
                       setState(() => _detectedVideoUrl = url);
                     }
                   },
                 ),
                 if (_detectedVideoUrl != null)
                   Positioned(
-                    bottom: 20,
+                    bottom: 30,
                     right: 20,
-                    child: FloatingActionButton(
+                    child: FloatingActionButton.extended(
                       backgroundColor: Colors.redAccent,
-                      child: const Icon(Icons.download, color: Colors.white),
+                      icon: const Icon(Icons.download, color: Colors.white),
+                      label: const Text("تحميل الفيديو", style: TextStyle(color: Colors.white)),
                       onPressed: () {
                         ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text("تم كشف فيديو! جاري التحضير...")),
+                          const SnackBar(content: Text("تم كشف الفيديو! جاري التحضير للتحميل..."), behavior: SnackBarBehavior.floating),
                         );
                       },
                     ),
@@ -296,27 +340,15 @@ class _BrowserPageState extends State<BrowserPage> {
           ),
           // شريط أدوات المتصفح السفلي
           Container(
-            height: 50,
-            color: const Color(0xFF1E1E1E),
+            height: 55,
+            decoration: const BoxDecoration(color: Color(0xFF1A1A1A), border: Border(top: BorderSide(color: Colors.white10))),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
-                IconButton(
-                  icon: Icon(Icons.arrow_back, color: _canGoBack ? Colors.white : Colors.grey),
-                  onPressed: _canGoBack ? () => webViewController?.goBack() : null,
-                ),
-                IconButton(
-                  icon: Icon(Icons.arrow_forward, color: _canGoForward ? Colors.white : Colors.grey),
-                  onPressed: _canGoForward ? () => webViewController?.goForward() : null,
-                ),
-                IconButton(
-                  icon: const Icon(Icons.home),
-                  onPressed: () => webViewController?.loadUrl(urlRequest: URLRequest(url: WebUri("https://www.google.com"))),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.share),
-                  onPressed: () {},
-                ),
+                IconButton(icon: Icon(Icons.arrow_back_ios_new, size: 18, color: _canGoBack ? Colors.white : Colors.grey), onPressed: _canGoBack ? () => webViewController?.goBack() : null),
+                IconButton(icon: Icon(Icons.arrow_forward_ios, size: 18, color: _canGoForward ? Colors.white : Colors.grey), onPressed: _canGoForward ? () => webViewController?.goForward() : null),
+                IconButton(icon: const Icon(Icons.home_rounded, size: 22), onPressed: () => webViewController?.loadUrl(urlRequest: URLRequest(url: WebUri("https://www.google.com")))),
+                IconButton(icon: const Icon(Icons.share_rounded, size: 20), onPressed: () {}),
               ],
             ),
           ),
