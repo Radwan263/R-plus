@@ -11,6 +11,9 @@ dependencies:
     sdk: flutter
   cupertino_icons: ^1.0.6
   flutter_inappwebview: ^6.0.0
+  # المحركات الجديدة
+  youtube_explode_dart: ^2.2.2
+  http: ^1.1.0
 
 dev_dependencies:
   flutter_test:
