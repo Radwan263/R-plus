@@ -2,13 +2,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart' as yt;
 import 'package:http/http.dart' as http;
+import 'dart:io';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // تفعيل إعدادات WebView المتقدمة للأندرويد
-  if (InAppWebViewHelper.isAndroid()) {
+  
+  if (Platform.isAndroid) {
     await InAppWebViewController.setWebContentsDebuggingEnabled(true);
   }
+  
   runApp(const RCimaApp());
 }
 
@@ -17,7 +19,7 @@ class RCimaApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'R Cima Downloader',
+      title: 'R-Plus Downloader',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         brightness: Brightness.dark,
@@ -66,9 +68,6 @@ class _MainScreenState extends State<MainScreen> {
   }
 }
 
-// ----------------------------------------------------
-// شاشة الرئيسية - محرك التحليل الذكي
-// ----------------------------------------------------
 class HomePage extends StatefulWidget {
   final VoidCallback onDownloadStarted;
   const HomePage({super.key, required this.onDownloadStarted});
@@ -84,7 +83,6 @@ class _HomePageState extends State<HomePage> {
     if (url.isEmpty) return;
     setState(() => _isLoading = true);
     try {
-      // تنظيف الرابط
       final cleanUrl = url.trim();
       
       if (cleanUrl.contains("youtube.com") || cleanUrl.contains("youtu.be")) {
@@ -94,31 +92,39 @@ class _HomePageState extends State<HomePage> {
           final manifest = await ytInstance.videos.streamsClient.getManifest(video.id);
           final streamInfo = manifest.muxed.withHighestBitrate();
           final size = streamInfo.size.totalMegaBytes.toStringAsFixed(2);
-          _showDownloadSheet(video.title, "$size MB", isYoutube: true);
+          _showDownloadSheet(video.title, "$size MB", isYoutube: true, videoUrl: streamInfo.url.toString());
         } finally {
           ytInstance.close();
         }
       } else {
-        // محرك تحليل عام للسوشيال ميديا (فيسبوك، تيك توك، إلخ)
-        final response = await http.head(Uri.parse(cleanUrl), headers: {
+        // Generic analysis for other social media
+        final response = await http.get(Uri.parse(cleanUrl), headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36'
         });
         
-        final sizeBytes = int.tryParse(response.headers['content-length'] ?? "0") ?? 0;
-        final sizeMB = (sizeBytes / (1024 * 1024)).toStringAsFixed(2);
-        final contentType = response.headers['content-type'] ?? "";
-        
-        if (sizeBytes > 0 || contentType.contains("video")) {
-          _showDownloadSheet("فيديو مكتشف", sizeBytes > 0 ? "$sizeMB MB" : "رابط مباشر", isYoutube: false);
+        if (response.statusCode == 200) {
+          // Simple regex to find video tags or common patterns if direct link fails
+          if (response.headers['content-type']?.contains("video") ?? false) {
+             _showDownloadSheet("فيديو مكتشف", "رابط مباشر", isYoutube: false, videoUrl: cleanUrl);
+          } else {
+            // Check for Open Graph video tags
+            final metaMatch = RegExp(r'property="og:video" content="([^"]+)"').firstMatch(response.body);
+            if (metaMatch != null) {
+              final videoUrl = metaMatch.group(1)!;
+              _showDownloadSheet("فيديو من السوشيال ميديا", "مكتشف", isYoutube: false, videoUrl: videoUrl);
+            } else {
+               throw Exception("لم يتم العثور على محتوى فيديو مباشر. جرب استخدام المتصفح الداخلي.");
+            }
+          }
         } else {
-          throw Exception("لم يتم العثور على محتوى فيديو");
+          throw Exception("فشل الوصول للرابط. كود الحالة: ${response.statusCode}");
         }
       }
     } catch (e) {
       debugPrint("Analysis Error: $e");
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: const Text("فشل التحليل: تأكد من الرابط أو جرب فتحه في المتصفح الداخلي"),
+          content: Text("فشل التحليل: ${e.toString().replaceAll("Exception: ", "")}"),
           backgroundColor: Colors.redAccent,
           behavior: SnackBarBehavior.floating,
         )
@@ -128,7 +134,7 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  void _showDownloadSheet(String title, String size, {required bool isYoutube}) {
+  void _showDownloadSheet(String title, String size, {required bool isYoutube, required String videoUrl}) {
     showModalBottomSheet(
       context: context, isScrollControlled: true, backgroundColor: const Color(0xFF1A1A1A),
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(25))),
@@ -146,13 +152,19 @@ class _HomePageState extends State<HomePage> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
-                if (isYoutube) _choiceChip("فيديو MP4", Icons.movie, Colors.blueAccent),
+                _choiceChip("فيديو MP4", Icons.movie, Colors.blueAccent),
                 _choiceChip("صوت MP3", Icons.audiotrack, Colors.orangeAccent),
               ],
             ),
             const SizedBox(height: 30),
             ElevatedButton(
-              onPressed: () { Navigator.pop(context); widget.onDownloadStarted(); },
+              onPressed: () { 
+                Navigator.pop(context); 
+                widget.onDownloadStarted();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text("بدأ التحميل في الخلفية..."), behavior: SnackBarBehavior.floating)
+                );
+              },
               style: ElevatedButton.styleFrom(
                 minimumSize: const Size(double.infinity, 55),
                 backgroundColor: Colors.blueAccent,
@@ -232,9 +244,6 @@ class _HomePageState extends State<HomePage> {
   }
 }
 
-// ----------------------------------------------------
-// شاشة المتصفح المتكامل (Integrated Browser)
-// ----------------------------------------------------
 class BrowserPage extends StatefulWidget {
   const BrowserPage({super.key});
   @override
@@ -277,7 +286,10 @@ class _BrowserPageState extends State<BrowserPage> {
           ),
         ),
         actions: [
-          IconButton(icon: const Icon(Icons.refresh, size: 20), onPressed: () => webViewController?.reload()),
+          IconButton(
+            icon: const Icon(Icons.refresh, size: 20),
+            onPressed: () => webViewController?.reload(),
+          )
         ],
       ),
       body: Column(
@@ -295,9 +307,12 @@ class _BrowserPageState extends State<BrowserPage> {
                     useShouldInterceptAjaxRequest: true,
                     useShouldInterceptFetchRequest: true,
                     mediaPlaybackRequiresUserGesture: false,
-                    transparentBackground: false, // تغيير لضمان عدم ظهور شاشة سوداء
+                    transparentBackground: false, 
                     hardwareAcceleration: true,
                     safeBrowsingEnabled: true,
+                    cacheEnabled: true,
+                    domStorageEnabled: true,
+                    supportZoom: true,
                   ),
                   onWebViewCreated: (controller) => webViewController = controller,
                   onLoadStart: (controller, url) {
@@ -316,7 +331,9 @@ class _BrowserPageState extends State<BrowserPage> {
                   onLoadResource: (controller, resource) {
                     final url = resource.url.toString();
                     if (url.contains(".mp4") || url.contains(".m3u8") || url.contains("fbcdn.net") || url.contains("googlevideo.com")) {
-                      setState(() => _detectedVideoUrl = url);
+                      if (_detectedVideoUrl == null) {
+                        setState(() => _detectedVideoUrl = url);
+                      }
                     }
                   },
                 ),
@@ -330,7 +347,7 @@ class _BrowserPageState extends State<BrowserPage> {
                       label: const Text("تحميل الفيديو", style: TextStyle(color: Colors.white)),
                       onPressed: () {
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text("تم كشف الفيديو! جاري التحضير للتحميل..."), behavior: SnackBarBehavior.floating),
+                          const SnackBar(content: Text("تم كشف الفيديو! جاري التحميل..."), behavior: SnackBarBehavior.floating),
                         );
                       },
                     ),
@@ -338,7 +355,6 @@ class _BrowserPageState extends State<BrowserPage> {
               ],
             ),
           ),
-          // شريط أدوات المتصفح السفلي
           Container(
             height: 55,
             decoration: const BoxDecoration(color: Color(0xFF1A1A1A), border: Border(top: BorderSide(color: Colors.white10))),
