@@ -74,25 +74,41 @@ class _HomePageState extends State<HomePage> {
 
   // المحرك الذكي لتحليل الروابط
   Future<void> _analyzeUrl(String url) async {
+    if (url.isEmpty) return;
     setState(() => _isLoading = true);
     try {
       if (url.contains("youtube.com") || url.contains("youtu.be")) {
-        var ytInstance = yt.YoutubeExplode();
-        var video = await ytInstance.videos.get(url);
-        var manifest = await ytInstance.videos.streamsClient.getManifest(video.id);
-        var size = manifest.muxed.bestQuality.size.totalMegaBytes.toStringAsFixed(2);
-        _showDownloadSheet(video.title, "$size MB", isYoutube: true);
-        ytInstance.close();
+        final ytInstance = yt.YoutubeExplode();
+        try {
+          final video = await ytInstance.videos.get(url);
+          final manifest = await ytInstance.videos.streamsClient.getManifest(video.id);
+          final streamInfo = manifest.muxed.withHighestBitrate();
+          final size = streamInfo.size.totalMegaBytes.toStringAsFixed(2);
+          _showDownloadSheet(video.title, "$size MB", isYoutube: true);
+        } finally {
+          ytInstance.close();
+        }
+      } else if (url.contains("facebook.com") || url.contains("fb.watch")) {
+        // محاكاة تحليل فيسبوك (يتطلب عادة API أو كشط للبيانات)
+        // سنحاول الحصول على معلومات الرأس كبداية
+        final response = await http.head(Uri.parse(url), headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        });
+        final sizeBytes = int.tryParse(response.headers['content-length'] ?? "0") ?? 0;
+        final sizeMB = (sizeBytes / (1024 * 1024)).toStringAsFixed(2);
+        _showDownloadSheet("فيديو فيسبوك", sizeBytes > 0 ? "$sizeMB MB" : "غير معروف", isYoutube: false);
       } else {
-        // للمواقع الأخرى (فيسبوك، تيك توك، روابط مباشرة)
-        var response = await http.head(Uri.parse(url));
-        var sizeBytes = int.tryParse(response.headers['content-length'] ?? "0") ?? 0;
-        var sizeMB = (sizeBytes / (1024 * 1024)).toStringAsFixed(2);
-        var contentType = response.headers['content-type'] ?? "";
-        _showDownloadSheet("ملف فيديو مكتشف", "$sizeMB MB", isYoutube: false);
+        // للمواقع الأخرى وروابط المباشرة
+        final response = await http.head(Uri.parse(url));
+        final sizeBytes = int.tryParse(response.headers['content-length'] ?? "0") ?? 0;
+        final sizeMB = (sizeBytes / (1024 * 1024)).toStringAsFixed(2);
+        _showDownloadSheet("ملف مكتشف", sizeBytes > 0 ? "$sizeMB MB" : "رابط مباشر", isYoutube: false);
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("فشل التحليل: تأكد من الرابط")));
+      debugPrint("Error analyzing URL: $e");
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("فشل التحليل: تأكد من الرابط أو اتصالك بالإنترنت"))
+      );
     } finally {
       setState(() => _isLoading = false);
     }
@@ -172,14 +188,69 @@ class BrowserPage extends StatefulWidget {
 
 class _BrowserPageState extends State<BrowserPage> {
   InAppWebViewController? webViewController;
+  double progress = 0;
+  bool isError = false;
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("المتصفح"), backgroundColor: const Color(0xFF1E1E1E)),
-      body: InAppWebView(
-        initialUrlRequest: URLRequest(url: WebUri("https://www.google.com")),
-        onWebViewCreated: (controller) => webViewController = controller,
-        initialSettings: InAppWebViewSettings(javaScriptEnabled: true, allowsInlineMediaPlayback: true),
+      appBar: AppBar(
+        title: const Text("المتصفح الذكي"),
+        backgroundColor: const Color(0xFF1E1E1E),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: () => webViewController?.reload(),
+          ),
+        ],
+      ),
+      body: Column(
+        children: [
+          if (progress < 1.0)
+            LinearProgressIndicator(value: progress, backgroundColor: Colors.transparent, color: Colors.blueAccent),
+          Expanded(
+            child: Stack(
+              children: [
+                InAppWebView(
+                  initialUrlRequest: URLRequest(url: WebUri("https://www.google.com")),
+                  onWebViewCreated: (controller) => webViewController = controller,
+                  initialSettings: InAppWebViewSettings(
+                    javaScriptEnabled: true,
+                    allowsInlineMediaPlayback: true,
+                    useShouldOverrideUrlLoading: true,
+                    mediaPlaybackRequiresUserGesture: false,
+                    transparentBackground: true, // قد يساعد في حل مشكلة الشاشة السوداء
+                  ),
+                  onProgressChanged: (controller, progress) {
+                    setState(() => this.progress = progress / 100);
+                  },
+                  onReceivedError: (controller, request, error) {
+                    setState(() => isError = true);
+                    debugPrint("WebView Error: ${error.description}");
+                  },
+                  onLoadStop: (controller, url) {
+                    setState(() => isError = false);
+                  },
+                ),
+                if (isError)
+                  Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(Icons.error_outline, size: 50, color: Colors.red),
+                        const SizedBox(height: 10),
+                        const Text("فشل تحميل الصفحة"),
+                        ElevatedButton(
+                          onPressed: () => webViewController?.reload(),
+                          child: const Text("إعادة المحاولة"),
+                        )
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
