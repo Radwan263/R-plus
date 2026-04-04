@@ -1,33 +1,46 @@
+import 'dart:async';
+import 'dart:io';
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart' as yt;
-import 'package:http/http.dart' as http;
-import 'dart:io';
+import 'package:dio/dio.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:intl/intl.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
   if (Platform.isAndroid) {
     await InAppWebViewController.setWebContentsDebuggingEnabled(true);
   }
-  
-  runApp(const RCimaApp());
+  runApp(const RMediaHunterApp());
 }
 
-class RCimaApp extends StatelessWidget {
-  const RCimaApp({super.key});
+class RMediaHunterApp extends StatelessWidget {
+  const RMediaHunterApp({super.key});
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'R-Plus Downloader',
+      title: 'R-Plus MediaHunter',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         brightness: Brightness.dark,
-        primaryColor: Colors.blueAccent,
-        scaffoldBackgroundColor: const Color(0xFF0F0F0F),
         useMaterial3: true,
+        primaryColor: const Color(0xFF2196F3),
+        scaffoldBackgroundColor: const Color(0xFF0A0E14),
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF2196F3),
+          brightness: Brightness.dark,
+          surface: const Color(0xFF161B22),
+        ),
       ),
-      builder: (context, child) => Directionality(textDirection: TextDirection.rtl, child: child!),
+      builder: (context, child) => Directionality(
+        textDirection: TextDirection.rtl,
+        child: child!,
+      ),
       home: const MainScreen(),
     );
   }
@@ -35,337 +48,298 @@ class RCimaApp extends StatelessWidget {
 
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
+
   @override
   State<MainScreen> createState() => _MainScreenState();
 }
 
 class _MainScreenState extends State<MainScreen> {
   int _selectedIndex = 0;
-  
+  final PageController _pageController = PageController();
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: IndexedStack(
-        index: _selectedIndex,
-        children: [
-          HomePage(onDownloadStarted: () => setState(() => _selectedIndex = 2)),
-          const BrowserPage(),
-          const DownloadsPage(),
-        ],
+      body: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [Color(0xFF0D1117), Color(0xFF010409)],
+          ),
+        ),
+        child: PageView(
+          controller: _pageController,
+          onPageChanged: (index) => setState(() => _selectedIndex = index),
+          children: [
+            const HomePage(),
+            const BrowserPage(),
+            const DownloadsPage(),
+          ],
+        ),
       ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _selectedIndex,
-        onDestinationSelected: (index) => setState(() => _selectedIndex = index),
-        backgroundColor: const Color(0xFF1A1A1A),
-        indicatorColor: Colors.blueAccent.withOpacity(0.2),
-        destinations: const [
-          NavigationDestination(icon: Icon(Icons.home_outlined), selectedIcon: Icon(Icons.home, color: Colors.blueAccent), label: 'الرئيسية'),
-          NavigationDestination(icon: Icon(Icons.travel_explore), selectedIcon: Icon(Icons.explore, color: Colors.blueAccent), label: 'المتصفح'),
-          NavigationDestination(icon: Icon(Icons.download_outlined), selectedIcon: Icon(Icons.download, color: Colors.blueAccent), label: 'التحميلات'),
-        ],
+      bottomNavigationBar: _buildGlassBottomNav(),
+    );
+  }
+
+  Widget _buildGlassBottomNav() {
+    return ClipRRect(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+        child: Container(
+          height: 80,
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.05),
+            border: Border(top: BorderSide(color: Colors.white.withOpacity(0.1))),
+          ),
+          child: BottomNavigationBar(
+            currentIndex: _selectedIndex,
+            onTap: (index) {
+              _pageController.animateToPage(index,
+                  duration: const Duration(milliseconds: 300),
+                  curve: Curves.easeInOut);
+            },
+            backgroundColor: Colors.transparent,
+            elevation: 0,
+            selectedItemColor: Colors.blueAccent,
+            unselectedItemColor: Colors.grey,
+            items: const [
+              BottomNavigationBarItem(icon: Icon(Icons.home_filled), label: 'الرئيسية'),
+              BottomNavigationBarItem(icon: Icon(Icons.explore_rounded), label: 'المتصفح'),
+              BottomNavigationBarItem(icon: Icon(Icons.download_done_rounded), label: 'التحميلات'),
+            ],
+          ),
+        ),
       ),
     );
   }
 }
 
+// -----------------------------------------------------------------------------
+// شاشة الرئيسية (Home)
+// -----------------------------------------------------------------------------
 class HomePage extends StatefulWidget {
-  final VoidCallback onDownloadStarted;
-  const HomePage({super.key, required this.onDownloadStarted});
+  const HomePage({super.key});
+
   @override
   State<HomePage> createState() => _HomePageState();
 }
 
 class _HomePageState extends State<HomePage> {
   final TextEditingController _urlController = TextEditingController();
-  bool _isLoading = false;
+  bool _isAnalyzing = false;
 
-  Future<void> _analyzeUrl(String url) async {
-    if (url.isEmpty) return;
-    setState(() => _isLoading = true);
+  Future<void> _analyzeUrl() async {
+    String url = _urlController.text.trim();
+    if (url.isEmpty) {
+      _showSmartSnackBar("يرجى إدخال رابط أولاً", Icons.warning_amber_rounded, Colors.orange);
+      return;
+    }
+
+    setState(() => _isAnalyzing = true);
     try {
-      final cleanUrl = url.trim();
-      
-      if (cleanUrl.contains("youtube.com") || cleanUrl.contains("youtu.be")) {
+      if (url.contains("youtube.com") || url.contains("youtu.be")) {
         final ytInstance = yt.YoutubeExplode();
-        try {
-          final video = await ytInstance.videos.get(cleanUrl);
-          final manifest = await ytInstance.videos.streamsClient.getManifest(video.id);
-          final streamInfo = manifest.muxed.withHighestBitrate();
-          final size = streamInfo.size.totalMegaBytes.toStringAsFixed(2);
-          _showDownloadSheet(video.title, "$size MB", isYoutube: true, videoUrl: streamInfo.url.toString());
-        } finally {
-          ytInstance.close();
-        }
+        final video = await ytInstance.videos.get(url);
+        final manifest = await ytInstance.videos.streamsClient.getManifest(video.id);
+        final streamInfo = manifest.muxed.withHighestBitrate();
+        ytInstance.close();
+        _showDownloadSheet(video.title, streamInfo.url.toString(), "YouTube");
       } else {
-        // Generic analysis for other social media
-        final response = await http.get(Uri.parse(cleanUrl), headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36'
-        });
-        
-        if (response.statusCode == 200) {
-          // Simple regex to find video tags or common patterns if direct link fails
-          if (response.headers['content-type']?.contains("video") ?? false) {
-             _showDownloadSheet("فيديو مكتشف", "رابط مباشر", isYoutube: false, videoUrl: cleanUrl);
-          } else {
-            // Check for Open Graph video tags
-            final metaMatch = RegExp(r'property="og:video" content="([^"]+)"').firstMatch(response.body);
-            if (metaMatch != null) {
-              final videoUrl = metaMatch.group(1)!;
-              _showDownloadSheet("فيديو من السوشيال ميديا", "مكتشف", isYoutube: false, videoUrl: videoUrl);
-            } else {
-               throw Exception("لم يتم العثور على محتوى فيديو مباشر. جرب استخدام المتصفح الداخلي.");
-            }
-          }
-        } else {
-          throw Exception("فشل الوصول للرابط. كود الحالة: ${response.statusCode}");
-        }
+        // محرك تحليل عام للسوشيال ميديا
+        _showSmartSnackBar("جاري البحث عن الفيديو...", Icons.search, Colors.blue);
+        // هنا يمكن إضافة TikWM API أو غيرها مستقبلاً
+        _showDownloadSheet("فيديو مكتشف", url, "Social Media");
       }
     } catch (e) {
-      debugPrint("Analysis Error: $e");
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text("فشل التحليل: ${e.toString().replaceAll("Exception: ", "")}"),
-          backgroundColor: Colors.redAccent,
-          behavior: SnackBarBehavior.floating,
-        )
-      );
+      _showSmartSnackBar("فشل التحليل: تأكد من الرابط", Icons.error_outline, Colors.red);
     } finally {
-      setState(() => _isLoading = false);
+      setState(() => _isAnalyzing = false);
     }
   }
 
-  void _showDownloadSheet(String title, String size, {required bool isYoutube, required String videoUrl}) {
+  void _showSmartSnackBar(String message, IconData icon, Color color) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            Icon(icon, color: Colors.white),
+            const SizedBox(width: 12),
+            Expanded(child: Text(message, style: const TextStyle(color: Colors.white))),
+          ],
+        ),
+        backgroundColor: color.withOpacity(0.9),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+        margin: const EdgeInsets.all(15),
+      ),
+    );
+  }
+
+  void _showDownloadSheet(String title, String downloadUrl, String source) {
     showModalBottomSheet(
-      context: context, isScrollControlled: true, backgroundColor: const Color(0xFF1A1A1A),
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(25))),
-      builder: (context) => Padding(
-        padding: const EdgeInsets.all(24.0),
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (context) => _GlassSheet(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.grey[700], borderRadius: BorderRadius.circular(2))),
+            Container(width: 50, height: 5, decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(10))),
             const SizedBox(height: 20),
-            Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold), maxLines: 2, textAlign: TextAlign.center),
+            Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold), textAlign: TextAlign.center, maxLines: 2),
             const SizedBox(height: 10),
-            Text("الحجم التقريبي: $size", style: TextStyle(color: Colors.grey[400])),
-            const SizedBox(height: 25),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                _choiceChip("فيديو MP4", Icons.movie, Colors.blueAccent),
-                _choiceChip("صوت MP3", Icons.audiotrack, Colors.orangeAccent),
-              ],
-            ),
+            Text("المصدر: $source", style: const TextStyle(color: Colors.blueAccent)),
             const SizedBox(height: 30),
-            ElevatedButton(
-              onPressed: () { 
-                Navigator.pop(context); 
-                widget.onDownloadStarted();
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text("بدأ التحميل في الخلفية..."), behavior: SnackBarBehavior.floating)
-                );
-              },
-              style: ElevatedButton.styleFrom(
-                minimumSize: const Size(double.infinity, 55),
-                backgroundColor: Colors.blueAccent,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-                elevation: 0,
-              ),
-              child: const Text("بدء التحميل الآن", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white)),
-            )
+            _buildActionButton("تحميل الفيديو (MP4)", Icons.movie_creation_rounded, Colors.blueAccent, () => _startDownload(title, downloadUrl)),
+            const SizedBox(height: 12),
+            _buildActionButton("تحميل صوت (MP3)", Icons.audiotrack_rounded, Colors.orangeAccent, () {}),
+            const SizedBox(height: 30),
           ],
         ),
       ),
     );
   }
 
-  Widget _choiceChip(String label, IconData icon, Color color) => Chip(
-    avatar: Icon(icon, size: 18, color: color),
-    label: Text(label),
-    backgroundColor: Colors.black26,
-    side: BorderSide(color: color.withOpacity(0.3)),
-  );
+  Widget _buildActionButton(String label, IconData icon, Color color, VoidCallback onTap) {
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 15, horizontal: 20),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.15),
+          borderRadius: BorderRadius.circular(15),
+          border: Border.all(color: color.withOpacity(0.3)),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, color: color),
+            const SizedBox(width: 15),
+            Text(label, style: const TextStyle(fontWeight: FontWeight.bold)),
+            const Spacer(),
+            const Icon(Icons.arrow_forward_ios, size: 14, color: Colors.white24),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _startDownload(String title, String url) async {
+    Navigator.pop(context);
+    _showSmartSnackBar("بدأ التحميل الآن...", Icons.downloading, Colors.green);
+    // منطق التحميل باستخدام Dio سيتم هنا
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [Colors.blueAccent.withOpacity(0.1), Colors.transparent],
-          ),
-        ),
-        child: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24.0),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Icon(Icons.cloud_download_rounded, size: 100, color: Colors.blueAccent),
-                const SizedBox(height: 10),
-                const Text("R-Plus Downloader", style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, letterSpacing: 1.2)),
-                const Text("حمل فيديوهاتك المفضلة بسهولة", style: TextStyle(color: Colors.grey)),
-                const SizedBox(height: 40),
-                TextField(
-                  controller: _urlController,
-                  style: const TextStyle(fontSize: 14),
-                  decoration: InputDecoration(
-                    hintText: "الزق رابط الفيديو هنا...",
-                    prefixIcon: const Icon(Icons.link, color: Colors.blueAccent),
-                    filled: true,
-                    fillColor: Colors.black26,
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(20), borderSide: BorderSide.none),
-                    focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(20), borderSide: const BorderSide(color: Colors.blueAccent, width: 1)),
-                  ),
+    return Padding(
+      padding: const EdgeInsets.all(24.0),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(Icons.auto_fix_high_rounded, size: 80, color: Colors.blueAccent),
+          const SizedBox(height: 20),
+          const Text("R-Plus MediaHunter", style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
+          const Text("صائد الفيديوهات الذكي", style: TextStyle(color: Colors.grey)),
+          const SizedBox(height: 50),
+          _buildGlassInput(),
+          const SizedBox(height: 25),
+          _isAnalyzing 
+            ? const CircularProgressIndicator()
+            : ElevatedButton.icon(
+                onPressed: _analyzeUrl,
+                icon: const Icon(Icons.bolt_rounded),
+                label: const Text("تحليل الرابط الآن"),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.blueAccent,
+                  foregroundColor: Colors.white,
+                  minimumSize: const Size(double.infinity, 60),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
                 ),
-                const SizedBox(height: 25),
-                if (_isLoading) 
-                  const CircularProgressIndicator(color: Colors.blueAccent)
-                else 
-                  ElevatedButton.icon(
-                    onPressed: () => _analyzeUrl(_urlController.text),
-                    icon: const Icon(Icons.auto_awesome, size: 20),
-                    label: const Text("تحليل الرابط الذكي"),
-                    style: ElevatedButton.styleFrom(
-                      minimumSize: const Size(220, 55),
-                      backgroundColor: Colors.blueAccent,
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
-                    ),
-                  ),
-              ],
-            ),
-          ),
+              ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildGlassInput() {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.white.withOpacity(0.1)),
+      ),
+      child: TextField(
+        controller: _urlController,
+        decoration: const InputDecoration(
+          hintText: "ضع رابط الفيديو هنا...",
+          prefixIcon: Icon(Icons.link_rounded, color: Colors.blueAccent),
+          border: InputBorder.none,
+          contentPadding: EdgeInsets.symmetric(vertical: 18),
         ),
       ),
     );
   }
 }
 
+// -----------------------------------------------------------------------------
+// شاشة المتصفح (Browser) - حل فيسبوك الجذري
+// -----------------------------------------------------------------------------
 class BrowserPage extends StatefulWidget {
   const BrowserPage({super.key});
+
   @override
   State<BrowserPage> createState() => _BrowserPageState();
 }
 
 class _BrowserPageState extends State<BrowserPage> {
   InAppWebViewController? webViewController;
-  final TextEditingController _addressController = TextEditingController(text: "https://www.google.com");
   double _progress = 0;
-  bool _canGoBack = false;
-  bool _canGoForward = false;
-  String? _detectedVideoUrl;
+  final TextEditingController _searchController = TextEditingController(text: "https://www.google.com");
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        backgroundColor: const Color(0xFF1A1A1A),
+        backgroundColor: Colors.transparent,
         elevation: 0,
-        titleSpacing: 0,
-        title: Container(
-          height: 42,
-          margin: const EdgeInsets.symmetric(horizontal: 12),
-          decoration: BoxDecoration(color: Colors.black, borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.white10)),
-          child: TextField(
-            controller: _addressController,
-            style: const TextStyle(fontSize: 13),
-            decoration: const InputDecoration(
-              hintText: "ابحث أو أدخل عنواناً...",
-              border: InputBorder.none,
-              prefixIcon: Icon(Icons.search, size: 18, color: Colors.grey),
-              contentPadding: EdgeInsets.symmetric(vertical: 10),
-            ),
-            onSubmitted: (value) {
-              var url = value.trim();
-              if (!url.startsWith("http")) url = "https://www.google.com/search?q=$url";
-              webViewController?.loadUrl(urlRequest: URLRequest(url: WebUri(url)));
-            },
-          ),
-        ),
+        title: _buildGlassSearchBar(),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh, size: 20),
-            onPressed: () => webViewController?.reload(),
-          )
+          IconButton(icon: const Icon(Icons.refresh_rounded), onPressed: () => webViewController?.reload()),
         ],
       ),
       body: Column(
         children: [
           if (_progress < 1.0)
-            LinearProgressIndicator(value: _progress, backgroundColor: Colors.transparent, color: Colors.blueAccent, minHeight: 2),
+            LinearProgressIndicator(value: _progress, color: Colors.blueAccent, backgroundColor: Colors.transparent, minHeight: 2),
           Expanded(
-            child: Stack(
-              children: [
-                InAppWebView(
-                  initialUrlRequest: URLRequest(url: WebUri("https://www.google.com")),
-                  initialSettings: InAppWebViewSettings(
-                    javaScriptEnabled: true,
-                    allowsInlineMediaPlayback: true,
-                    useShouldInterceptAjaxRequest: true,
-                    useShouldInterceptFetchRequest: true,
-                    mediaPlaybackRequiresUserGesture: false,
-                    transparentBackground: false, 
-                    hardwareAcceleration: true,
-                    safeBrowsingEnabled: true,
-                    cacheEnabled: true,
-                    domStorageEnabled: true,
-                    supportZoom: true,
-                  ),
-                  onWebViewCreated: (controller) => webViewController = controller,
-                  onLoadStart: (controller, url) {
-                    setState(() {
-                      _addressController.text = url.toString();
-                      _detectedVideoUrl = null;
-                    });
-                  },
-                  onLoadStop: (controller, url) async {
-                    setState(() => _addressController.text = url.toString());
-                    _checkHistory();
-                  },
-                  onProgressChanged: (controller, progress) {
-                    setState(() => _progress = progress / 100);
-                  },
-                  onLoadResource: (controller, resource) {
-                    final url = resource.url.toString();
-                    if (url.contains(".mp4") || url.contains(".m3u8") || url.contains("fbcdn.net") || url.contains("googlevideo.com")) {
-                      if (_detectedVideoUrl == null) {
-                        setState(() => _detectedVideoUrl = url);
-                      }
-                    }
-                  },
-                ),
-                if (_detectedVideoUrl != null)
-                  Positioned(
-                    bottom: 30,
-                    right: 20,
-                    child: FloatingActionButton.extended(
-                      backgroundColor: Colors.redAccent,
-                      icon: const Icon(Icons.download, color: Colors.white),
-                      label: const Text("تحميل الفيديو", style: TextStyle(color: Colors.white)),
-                      onPressed: () {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text("تم كشف الفيديو! جاري التحميل..."), behavior: SnackBarBehavior.floating),
-                        );
-                      },
-                    ),
-                  ),
-              ],
-            ),
-          ),
-          Container(
-            height: 55,
-            decoration: const BoxDecoration(color: Color(0xFF1A1A1A), border: Border(top: BorderSide(color: Colors.white10))),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                IconButton(icon: Icon(Icons.arrow_back_ios_new, size: 18, color: _canGoBack ? Colors.white : Colors.grey), onPressed: _canGoBack ? () => webViewController?.goBack() : null),
-                IconButton(icon: Icon(Icons.arrow_forward_ios, size: 18, color: _canGoForward ? Colors.white : Colors.grey), onPressed: _canGoForward ? () => webViewController?.goForward() : null),
-                IconButton(icon: const Icon(Icons.home_rounded, size: 22), onPressed: () => webViewController?.loadUrl(urlRequest: URLRequest(url: WebUri("https://www.google.com")))),
-                IconButton(icon: const Icon(Icons.share_rounded, size: 20), onPressed: () {}),
-              ],
+            child: InAppWebView(
+              initialUrlRequest: URLRequest(url: WebUri("https://www.google.com")),
+              initialSettings: InAppWebViewSettings(
+                javaScriptEnabled: true,
+                allowsInlineMediaPlayback: true,
+                useShouldInterceptAjaxRequest: true,
+                useShouldInterceptFetchRequest: true,
+                // حل فيسبوك: User-Agent وهمي قوي
+                userAgent: "Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Mobile Safari/537.36",
+                transparentBackground: false,
+                safeBrowsingEnabled: true,
+                hardwareAcceleration: true,
+              ),
+              onWebViewCreated: (controller) => webViewController = controller,
+              onProgressChanged: (controller, progress) => setState(() => _progress = progress / 100),
+              shouldOverrideUrlLoading: (controller, navigationAction) async {
+                var uri = navigationAction.request.url!;
+                // منع الروابط غير المعروفة (مثل fb://)
+                if (!["http", "https", "file", "chrome", "data", "javascript", "about"].contains(uri.scheme)) {
+                  return NavigationActionPolicy.CANCEL;
+                }
+                return NavigationActionPolicy.ALLOW;
+              },
+              onReceivedError: (controller, request, error) {
+                // تجاهل أخطاء الـ Scheme غير المعروفة
+                if (error.description.contains("ERR_UNKNOWN_URL_SCHEME")) return;
+              },
             ),
           ),
         ],
@@ -373,20 +347,93 @@ class _BrowserPageState extends State<BrowserPage> {
     );
   }
 
-  Future<void> _checkHistory() async {
-    if (webViewController != null) {
-      bool canBack = await webViewController!.canGoBack();
-      bool canForward = await webViewController!.canGoForward();
-      setState(() {
-        _canGoBack = canBack;
-        _canGoForward = canForward;
-      });
-    }
+  Widget _buildGlassSearchBar() {
+    return Container(
+      height: 45,
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white.withOpacity(0.1)),
+      ),
+      child: TextField(
+        controller: _searchController,
+        style: const TextStyle(fontSize: 14),
+        decoration: const InputDecoration(
+          hintText: "ابحث أو أدخل عنواناً...",
+          prefixIcon: Icon(Icons.search_rounded, size: 20, color: Colors.grey),
+          border: InputBorder.none,
+          contentPadding: EdgeInsets.symmetric(vertical: 10),
+        ),
+        onSubmitted: (val) {
+          var url = val.trim();
+          if (!url.startsWith("http")) url = "https://www.google.com/search?q=$url";
+          webViewController?.loadUrl(urlRequest: URLRequest(url: WebUri(url)));
+        },
+      ),
+    );
   }
 }
 
+// -----------------------------------------------------------------------------
+// شاشة التحميلات (Downloads) - الحالات الفارغة
+// -----------------------------------------------------------------------------
 class DownloadsPage extends StatelessWidget {
   const DownloadsPage({super.key});
+
   @override
-  Widget build(BuildContext context) => const Scaffold(body: Center(child: Text("قائمة التحميلات تظهر هنا")));
+  Widget build(BuildContext context) {
+    List downloads = []; // مثال لقائمة فارغة
+
+    return Scaffold(
+      appBar: AppBar(title: const Text("التحميلات المنتهية"), backgroundColor: Colors.transparent),
+      body: downloads.isEmpty 
+        ? _buildEmptyState()
+        : ListView.builder(
+            itemCount: downloads.length,
+            itemBuilder: (context, index) => ListTile(title: Text("فيديو $index")),
+          ),
+    );
+  }
+
+  Widget _buildEmptyState() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.cloud_off_rounded, size: 100, color: Colors.white.withOpacity(0.1)),
+          const SizedBox(height: 20),
+          const Text("لا توجد تحميلات حالياً..", style: TextStyle(fontSize: 18, color: Colors.grey)),
+          const SizedBox(height: 8),
+          const Text("ابدأ بصيد الفيديوهات الآن!", style: TextStyle(color: Colors.blueAccent)),
+        ],
+      ),
+    );
+  }
+}
+
+// -----------------------------------------------------------------------------
+// مكونات واجهة مستخدم إضافية (UI Components)
+// -----------------------------------------------------------------------------
+class _GlassSheet extends StatelessWidget {
+  final Widget child;
+  const _GlassSheet({required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
+        child: Container(
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: const Color(0xFF161B22).withOpacity(0.85),
+            border: Border.all(color: Colors.white.withOpacity(0.1)),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
+          ),
+          child: child,
+        ),
+      ),
+    );
+  }
 }
