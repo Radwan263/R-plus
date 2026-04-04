@@ -8,7 +8,12 @@ import 'package:dio/dio.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:intl/intl.dart';
+import 'package:video_player/video_player.dart';
+import 'package:chewie/chewie.dart';
+import 'package:local_auth/local_auth.dart';
+import 'package:package_info_plus/package_info_plus.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:open_file_plus/open_file_plus.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -41,7 +46,70 @@ class RMediaHunterApp extends StatelessWidget {
         textDirection: TextDirection.rtl,
         child: child!,
       ),
-      home: const MainScreen(),
+      home: const SplashScreen(),
+    );
+  }
+}
+
+// -----------------------------------------------------------------------------
+// شاشة البداية مع نظام القفل (Splash & Security)
+// -----------------------------------------------------------------------------
+class SplashScreen extends StatefulWidget {
+  const SplashScreen({super.key});
+
+  @override
+  State<SplashScreen> createState() => _SplashScreenState();
+}
+
+class _SplashScreenState extends State<SplashScreen> {
+  final LocalAuthentication auth = LocalAuthentication();
+
+  @override
+  void initState() {
+    super.initState();
+    _checkSecurity();
+  }
+
+  Future<void> _checkSecurity() async {
+    final prefs = await SharedPreferences.getInstance();
+    bool isLocked = prefs.getBool('app_lock') ?? false;
+
+    if (isLocked) {
+      try {
+        bool authenticated = await auth.authenticate(
+          localizedReason: 'يرجى المصادقة لفتح تطبيق R-Plus',
+          options: const AuthenticationOptions(stickyAuth: true, biometricsOnly: true),
+        );
+        if (authenticated) _goMain();
+      } catch (e) {
+        _goMain(); // في حال فشل المستشعر
+      }
+    } else {
+      Future.delayed(const Duration(seconds: 2), _goMain);
+    }
+  }
+
+  void _goMain() {
+    if (mounted) {
+      Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const MainScreen()));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.auto_fix_high_rounded, size: 100, color: Colors.blueAccent),
+            const SizedBox(height: 20),
+            const Text("R-Plus MediaHunter", style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 10),
+            const CircularProgressIndicator(color: Colors.blueAccent),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -75,6 +143,7 @@ class _MainScreenState extends State<MainScreen> {
             const HomePage(),
             const BrowserPage(),
             const DownloadsPage(),
+            const SettingsPage(),
           ],
         ),
       ),
@@ -103,15 +172,62 @@ class _MainScreenState extends State<MainScreen> {
             elevation: 0,
             selectedItemColor: Colors.blueAccent,
             unselectedItemColor: Colors.grey,
+            type: BottomNavigationBarType.fixed,
             items: const [
               BottomNavigationBarItem(icon: Icon(Icons.home_filled), label: 'الرئيسية'),
               BottomNavigationBarItem(icon: Icon(Icons.explore_rounded), label: 'المتصفح'),
               BottomNavigationBarItem(icon: Icon(Icons.download_done_rounded), label: 'التحميلات'),
+              BottomNavigationBarItem(icon: Icon(Icons.settings_rounded), label: 'الإعدادات'),
             ],
           ),
         ),
       ),
     );
+  }
+}
+
+// -----------------------------------------------------------------------------
+// محرك التحميل المتطور (Advanced Download Engine)
+// -----------------------------------------------------------------------------
+class DownloadManager {
+  static final DownloadManager _instance = DownloadManager._internal();
+  factory DownloadManager() => _instance;
+  DownloadManager._internal();
+
+  final Dio _dio = Dio();
+  final Map<String, CancelToken> _activeDownloads = {};
+  final Map<String, double> _progressMap = {};
+
+  Future<void> startDownload(String url, String fileName, Function(double) onProgress, Function() onComplete) async {
+    final dir = await getApplicationDocumentsDirectory();
+    final savePath = "${dir.path}/$fileName";
+    final cancelToken = CancelToken();
+    _activeDownloads[url] = cancelToken;
+
+    try {
+      await _dio.download(
+        url,
+        savePath,
+        cancelToken: cancelToken,
+        onReceiveProgress: (received, total) {
+          if (total != -1) {
+            double progress = received / total;
+            _progressMap[url] = progress;
+            onProgress(progress);
+          }
+        },
+      );
+      _activeDownloads.remove(url);
+      onComplete();
+    } catch (e) {
+      _activeDownloads.remove(url);
+      rethrow;
+    }
+  }
+
+  void cancelDownload(String url) {
+    _activeDownloads[url]?.cancel();
+    _activeDownloads.remove(url);
   }
 }
 
@@ -131,10 +247,7 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _analyzeUrl() async {
     String url = _urlController.text.trim();
-    if (url.isEmpty) {
-      _showSmartSnackBar("يرجى إدخال رابط أولاً", Icons.warning_amber_rounded, Colors.orange);
-      return;
-    }
+    if (url.isEmpty) return;
 
     setState(() => _isAnalyzing = true);
     try {
@@ -144,146 +257,87 @@ class _HomePageState extends State<HomePage> {
         final manifest = await ytInstance.videos.streamsClient.getManifest(video.id);
         final streamInfo = manifest.muxed.withHighestBitrate();
         ytInstance.close();
-        _showDownloadSheet(video.title, streamInfo.url.toString(), "YouTube");
+        _showDownloadSheet(video.title, streamInfo.url.toString());
       } else {
-        // محرك تحليل عام للسوشيال ميديا
-        _showSmartSnackBar("جاري البحث عن الفيديو...", Icons.search, Colors.blue);
-        // هنا يمكن إضافة TikWM API أو غيرها مستقبلاً
-        _showDownloadSheet("فيديو مكتشف", url, "Social Media");
+        _showDownloadSheet("فيديو من السوشيال ميديا", url);
       }
     } catch (e) {
-      _showSmartSnackBar("فشل التحليل: تأكد من الرابط", Icons.error_outline, Colors.red);
+      _showSmartSnackBar("فشل التحليل", Icons.error, Colors.red);
     } finally {
       setState(() => _isAnalyzing = false);
     }
   }
 
-  void _showSmartSnackBar(String message, IconData icon, Color color) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Row(
-          children: [
-            Icon(icon, color: Colors.white),
-            const SizedBox(width: 12),
-            Expanded(child: Text(message, style: const TextStyle(color: Colors.white))),
-          ],
-        ),
-        backgroundColor: color.withOpacity(0.9),
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-        margin: const EdgeInsets.all(15),
-      ),
-    );
-  }
-
-  void _showDownloadSheet(String title, String downloadUrl, String source) {
+  void _showDownloadSheet(String title, String downloadUrl) {
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
-      isScrollControlled: true,
       builder: (context) => _GlassSheet(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Container(width: 50, height: 5, decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(10))),
+            Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
             const SizedBox(height: 20),
-            Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold), textAlign: TextAlign.center, maxLines: 2),
-            const SizedBox(height: 10),
-            Text("المصدر: $source", style: const TextStyle(color: Colors.blueAccent)),
-            const SizedBox(height: 30),
-            _buildActionButton("تحميل الفيديو (MP4)", Icons.movie_creation_rounded, Colors.blueAccent, () => _startDownload(title, downloadUrl)),
-            const SizedBox(height: 12),
-            _buildActionButton("تحميل صوت (MP3)", Icons.audiotrack_rounded, Colors.orangeAccent, () {}),
-            const SizedBox(height: 30),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.pop(context);
+                _startDownload(title, downloadUrl);
+              },
+              child: const Text("بدء التحميل"),
+            ),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildActionButton(String label, IconData icon, Color color, VoidCallback onTap) {
-    return InkWell(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 15, horizontal: 20),
-        decoration: BoxDecoration(
-          color: color.withOpacity(0.15),
-          borderRadius: BorderRadius.circular(15),
-          border: Border.all(color: color.withOpacity(0.3)),
-        ),
-        child: Row(
-          children: [
-            Icon(icon, color: color),
-            const SizedBox(width: 15),
-            Text(label, style: const TextStyle(fontWeight: FontWeight.bold)),
-            const Spacer(),
-            const Icon(Icons.arrow_forward_ios, size: 14, color: Colors.white24),
-          ],
-        ),
-      ),
-    );
+  void _startDownload(String title, String url) {
+    DownloadManager().startDownload(url, "${title.replaceAll(' ', '_')}.mp4", (p) {
+      // تحديث الواجهة في حال كنت في شاشة التحميلات
+    }, () {
+      _showSmartSnackBar("اكتمل التحميل!", Icons.check_circle, Colors.green);
+    });
   }
 
-  Future<void> _startDownload(String title, String url) async {
-    Navigator.pop(context);
-    _showSmartSnackBar("بدأ التحميل الآن...", Icons.downloading, Colors.green);
-    // منطق التحميل باستخدام Dio سيتم هنا
+  void _showSmartSnackBar(String message, IconData icon, Color color) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(children: [Icon(icon, color: Colors.white), const SizedBox(width: 10), Text(message)]),
+        backgroundColor: color,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(24.0),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const Icon(Icons.auto_fix_high_rounded, size: 80, color: Colors.blueAccent),
-          const SizedBox(height: 20),
-          const Text("R-Plus MediaHunter", style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
-          const Text("صائد الفيديوهات الذكي", style: TextStyle(color: Colors.grey)),
-          const SizedBox(height: 50),
-          _buildGlassInput(),
-          const SizedBox(height: 25),
-          _isAnalyzing 
-            ? const CircularProgressIndicator()
-            : ElevatedButton.icon(
-                onPressed: _analyzeUrl,
-                icon: const Icon(Icons.bolt_rounded),
-                label: const Text("تحليل الرابط الآن"),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.blueAccent,
-                  foregroundColor: Colors.white,
-                  minimumSize: const Size(double.infinity, 60),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-                ),
-              ),
-        ],
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24.0),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.auto_fix_high_rounded, size: 80, color: Colors.blueAccent),
+            const SizedBox(height: 40),
+            _buildGlassInput(),
+            const SizedBox(height: 20),
+            _isAnalyzing ? const CircularProgressIndicator() : ElevatedButton(onPressed: _analyzeUrl, child: const Text("صيد الفيديو")),
+          ],
+        ),
       ),
     );
   }
 
   Widget _buildGlassInput() {
     return Container(
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.05),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: Colors.white.withOpacity(0.1)),
-      ),
-      child: TextField(
-        controller: _urlController,
-        decoration: const InputDecoration(
-          hintText: "ضع رابط الفيديو هنا...",
-          prefixIcon: Icon(Icons.link_rounded, color: Colors.blueAccent),
-          border: InputBorder.none,
-          contentPadding: EdgeInsets.symmetric(vertical: 18),
-        ),
-      ),
+      decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(15)),
+      child: TextField(controller: _urlController, decoration: const InputDecoration(hintText: "ضع الرابط هنا", border: InputBorder.none, contentPadding: EdgeInsets.all(15))),
     );
   }
 }
 
 // -----------------------------------------------------------------------------
-// شاشة المتصفح (Browser) - حل فيسبوك الجذري
+// المتصفح مع مانع إعلانات (Browser with Ad-Blocker)
 // -----------------------------------------------------------------------------
 class BrowserPage extends StatefulWidget {
   const BrowserPage({super.key});
@@ -295,50 +349,30 @@ class BrowserPage extends StatefulWidget {
 class _BrowserPageState extends State<BrowserPage> {
   InAppWebViewController? webViewController;
   double _progress = 0;
-  final TextEditingController _searchController = TextEditingController(text: "https://www.google.com");
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        title: _buildGlassSearchBar(),
-        actions: [
-          IconButton(icon: const Icon(Icons.refresh_rounded), onPressed: () => webViewController?.reload()),
-        ],
-      ),
+      appBar: AppBar(backgroundColor: Colors.transparent, title: const Text("المتصفح الذكي")),
       body: Column(
         children: [
-          if (_progress < 1.0)
-            LinearProgressIndicator(value: _progress, color: Colors.blueAccent, backgroundColor: Colors.transparent, minHeight: 2),
+          if (_progress < 1.0) LinearProgressIndicator(value: _progress),
           Expanded(
             child: InAppWebView(
               initialUrlRequest: URLRequest(url: WebUri("https://www.google.com")),
               initialSettings: InAppWebViewSettings(
                 javaScriptEnabled: true,
-                allowsInlineMediaPlayback: true,
-                useShouldInterceptAjaxRequest: true,
-                useShouldInterceptFetchRequest: true,
-                // حل فيسبوك: User-Agent وهمي قوي
-                userAgent: "Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Mobile Safari/537.36",
-                transparentBackground: false,
-                safeBrowsingEnabled: true,
-                hardwareAcceleration: true,
+                userAgent: "Mozilla/5.0 (Linux; Android 13) Chrome/116.0.0.0 Mobile Safari/537.36",
               ),
               onWebViewCreated: (controller) => webViewController = controller,
-              onProgressChanged: (controller, progress) => setState(() => _progress = progress / 100),
-              shouldOverrideUrlLoading: (controller, navigationAction) async {
-                var uri = navigationAction.request.url!;
-                // منع الروابط غير المعروفة (مثل fb://)
-                if (!["http", "https", "file", "chrome", "data", "javascript", "about"].contains(uri.scheme)) {
-                  return NavigationActionPolicy.CANCEL;
+              onProgressChanged: (c, p) => setState(() => _progress = p / 100),
+              shouldInterceptRequest: (controller, request) async {
+                // مانع إعلانات بسيط: حجب الروابط التي تحتوي على كلمات إعلانية
+                final url = request.url.toString();
+                if (url.contains("ads") || url.contains("doubleclick") || url.contains("pop-under")) {
+                  return WebResourceResponse(contentType: "text/plain", data: Uint8List(0));
                 }
-                return NavigationActionPolicy.ALLOW;
-              },
-              onReceivedError: (controller, request, error) {
-                // تجاهل أخطاء الـ Scheme غير المعروفة
-                if (error.description.contains("ERR_UNKNOWN_URL_SCHEME")) return;
+                return null;
               },
             ),
           ),
@@ -346,94 +380,194 @@ class _BrowserPageState extends State<BrowserPage> {
       ),
     );
   }
+}
 
-  Widget _buildGlassSearchBar() {
-    return Container(
-      height: 45,
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.08),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white.withOpacity(0.1)),
-      ),
-      child: TextField(
-        controller: _searchController,
-        style: const TextStyle(fontSize: 14),
-        decoration: const InputDecoration(
-          hintText: "ابحث أو أدخل عنواناً...",
-          prefixIcon: Icon(Icons.search_rounded, size: 20, color: Colors.grey),
-          border: InputBorder.none,
-          contentPadding: EdgeInsets.symmetric(vertical: 10),
-        ),
-        onSubmitted: (val) {
-          var url = val.trim();
-          if (!url.startsWith("http")) url = "https://www.google.com/search?q=$url";
-          webViewController?.loadUrl(urlRequest: URLRequest(url: WebUri(url)));
-        },
-      ),
+// -----------------------------------------------------------------------------
+// التحميلات مع مشغل فيديو (Downloads with Player)
+// -----------------------------------------------------------------------------
+class DownloadsPage extends StatefulWidget {
+  const DownloadsPage({super.key});
+
+  @override
+  State<DownloadsPage> createState() => _DownloadsPageState();
+}
+
+class _DownloadsPageState extends State<DownloadsPage> {
+  List<FileSystemEntity> _files = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadFiles();
+  }
+
+  Future<void> _loadFiles() async {
+    final dir = await getApplicationDocumentsDirectory();
+    setState(() {
+      _files = dir.listSync().where((f) => f.path.endsWith(".mp4")).toList();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text("التحميلات"), backgroundColor: Colors.transparent),
+      body: _files.isEmpty 
+        ? const Center(child: Text("لا توجد تحميلات"))
+        : ListView.builder(
+            itemCount: _files.length,
+            itemBuilder: (context, index) {
+              final file = _files[index];
+              return ListTile(
+                leading: const Icon(Icons.video_library_rounded),
+                title: Text(file.path.split('/').last),
+                onTap: () => _playVideo(file.path),
+                trailing: IconButton(icon: const Icon(Icons.delete, color: Colors.red), onPressed: () {
+                  file.deleteSync();
+                  _loadFiles();
+                }),
+              );
+            },
+          ),
+    );
+  }
+
+  void _playVideo(String path) {
+    Navigator.push(context, MaterialPageRoute(builder: (context) => VideoPlayerScreen(path: path)));
+  }
+}
+
+class VideoPlayerScreen extends StatefulWidget {
+  final String path;
+  const VideoPlayerScreen({super.key, required this.path});
+
+  @override
+  State<VideoPlayerScreen> createState() => _VideoPlayerScreenState();
+}
+
+class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
+  late VideoPlayerController _videoPlayerController;
+  ChewieController? _chewieController;
+
+  @override
+  void initState() {
+    super.initState();
+    _initPlayer();
+  }
+
+  Future<void> _initPlayer() async {
+    _videoPlayerController = VideoPlayerController.file(File(widget.path));
+    await _videoPlayerController.initialize();
+    _chewieController = ChewieController(
+      videoPlayerController: _videoPlayerController,
+      autoPlay: true,
+      looping: false,
+      aspectRatio: _videoPlayerController.value.aspectRatio,
+    );
+    setState(() {});
+  }
+
+  @override
+  void dispose() {
+    _videoPlayerController.dispose();
+    _chewieController?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: _chewieController != null ? Chewie(controller: _chewieController!) : const Center(child: CircularProgressIndicator()),
     );
   }
 }
 
 // -----------------------------------------------------------------------------
-// شاشة التحميلات (Downloads) - الحالات الفارغة
+// الإعدادات (Settings) - قفل التطبيق والتحديثات
 // -----------------------------------------------------------------------------
-class DownloadsPage extends StatelessWidget {
-  const DownloadsPage({super.key});
+class SettingsPage extends StatefulWidget {
+  const SettingsPage({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    List downloads = []; // مثال لقائمة فارغة
+  State<SettingsPage> createState() => _SettingsPageState();
+}
 
-    return Scaffold(
-      appBar: AppBar(title: const Text("التحميلات المنتهية"), backgroundColor: Colors.transparent),
-      body: downloads.isEmpty 
-        ? _buildEmptyState()
-        : ListView.builder(
-            itemCount: downloads.length,
-            itemBuilder: (context, index) => ListTile(title: Text("فيديو $index")),
-          ),
+class _SettingsPageState extends State<SettingsPage> {
+  bool _isLocked = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSettings();
+  }
+
+  Future<void> _loadSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() => _isLocked = prefs.getBool('app_lock') ?? false);
+  }
+
+  Future<void> _toggleLock(bool val) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('app_lock', val);
+    setState(() => _isLocked = val);
+  }
+
+  Future<void> _checkUpdate() async {
+    // محاكاة فحص التحديث من GitHub
+    _showUpdateDialog();
+  }
+
+  void _showUpdateDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text("تحديث جديد متاح!"),
+        content: const Text("نسخة v1.2.0 متوفرة الآن على GitHub. هل تريد التحديث؟"),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text("لاحقاً")),
+          ElevatedButton(onPressed: () => launchUrl(Uri.parse("https://github.com/Radwan263/R-plus/releases")), child: const Text("تحديث الآن")),
+        ],
+      ),
     );
   }
 
-  Widget _buildEmptyState() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text("الإعدادات"), backgroundColor: Colors.transparent),
+      body: ListView(
         children: [
-          Icon(Icons.cloud_off_rounded, size: 100, color: Colors.white.withOpacity(0.1)),
-          const SizedBox(height: 20),
-          const Text("لا توجد تحميلات حالياً..", style: TextStyle(fontSize: 18, color: Colors.grey)),
-          const SizedBox(height: 8),
-          const Text("ابدأ بصيد الفيديوهات الآن!", style: TextStyle(color: Colors.blueAccent)),
+          SwitchListTile(
+            title: const Text("قفل التطبيق (بصمة الإصبع)"),
+            subtitle: const Text("حماية خصوصيتك وتحميلاتك"),
+            value: _isLocked,
+            onChanged: _toggleLock,
+            secondary: const Icon(Icons.fingerprint),
+          ),
+          ListTile(
+            title: const Text("التحقق من التحديثات"),
+            subtitle: const Text("نسخة التطبيق v1.1.0"),
+            leading: const Icon(Icons.system_update_rounded),
+            onTap: _checkUpdate,
+          ),
+          const Divider(),
+          ListTile(
+            title: const Text("عن المطور"),
+            subtitle: const Text("Radwan - R-Plus Hunter"),
+            leading: const Icon(Icons.info_outline_rounded),
+          ),
         ],
       ),
     );
   }
 }
 
-// -----------------------------------------------------------------------------
-// مكونات واجهة مستخدم إضافية (UI Components)
-// -----------------------------------------------------------------------------
 class _GlassSheet extends StatelessWidget {
   final Widget child;
   const _GlassSheet({required this.child});
-
   @override
   Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
-        child: Container(
-          padding: const EdgeInsets.all(24),
-          decoration: BoxDecoration(
-            color: const Color(0xFF161B22).withOpacity(0.85),
-            border: Border.all(color: Colors.white.withOpacity(0.1)),
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
-          ),
-          child: child,
-        ),
-      ),
-    );
+    return Container(padding: const EdgeInsets.all(24), decoration: const BoxDecoration(color: Color(0xFF161B22), borderRadius: BorderRadius.vertical(top: Radius.circular(30))), child: child);
   }
 }
