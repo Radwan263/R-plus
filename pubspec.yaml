@@ -21,7 +21,7 @@ dependencies:
   video_player: ^2.8.2
   chewie: ^1.7.5
   local_auth: ^2.1.8
-  package_info_plus: ^5.0.1
+
   url_launcher: ^6.2.5
   flutter_local_notifications: ^17.0.0
   open_file_plus: ^3.3.1
