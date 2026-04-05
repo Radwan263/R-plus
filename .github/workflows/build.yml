@@ -27,24 +27,39 @@ jobs:
 
       - name: Force Kotlin and Rebuild Android
         run: |
-          # 1. إبادة مجلد الأندرويد وملف الذاكرة المخفي!
+          # 1. إبادة مجلد الأندرويد وملف الذاكرة المخفي لضمان بناء نظيف
           rm -rf android
           rm -f .metadata
           
           # 2. إجبار فلاتر على بناء مجلد جديد بلغة Kotlin الحديثة
           flutter create --platforms android -a kotlin --org com.radwan --project-name plus .
           
-          # 3. ترقية الكوتلن
+          # 3. ترقية الكوتلن في الإعدادات
           sed -i 's/id "org.jetbrains.kotlin.android" version .*/id "org.jetbrains.kotlin.android" version "1.9.24" apply false/g' android/settings.gradle
-          sed -i 's/ext.kotlin_version = .*/ext.kotlin_version = "1.9.24"/g' android/build.gradle || true
           
-          # 4. إجبار السيرفر على SDK 35
+          # 4. إجبار السيرفر على SDK 35 في التطبيق الرئيسي
           sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 35/g' android/app/build.gradle
           sed -i 's/compileSdk flutter.compileSdkVersion/compileSdk 35/g' android/app/build.gradle
           sed -i 's/targetSdk = flutter.targetSdkVersion/targetSdk = 35/g' android/app/build.gradle
           sed -i 's/targetSdk flutter.targetSdkVersion/targetSdk 35/g' android/app/build.gradle
           
-          # 5. الصلاحيات والاسم
+          # 5. الحل الجذري: إجبار جميع المكتبات (مثل wakelock_plus) على استخدام SDK 35
+          # يتم إضافة كود subprojects في نهاية ملف build.gradle الخاص بالتطبيق
+          cat <<EOF >> android/app/build.gradle
+
+subprojects {
+    afterEvaluate { project ->
+        if (project.hasProperty('android')) {
+            project.android {
+                compileSdkVersion 35
+                buildToolsVersion "35.0.0"
+            }
+        }
+    }
+}
+EOF
+
+          # 6. الصلاحيات والاسم
           sed -i 's/android:label="plus"/android:label="R_MediaHunter"/g' android/app/src/main/AndroidManifest.xml
           sed -i '/<application/i \    <uses-permission android:name="android.permission.INTERNET"/>' android/app/src/main/AndroidManifest.xml
           sed -i '/<application/i \    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>' android/app/src/main/AndroidManifest.xml
@@ -53,9 +68,13 @@ jobs:
           sed -i '/<application/i \    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO"/>' android/app/src/main/AndroidManifest.xml
           sed -i '/<application/i \    <uses-permission android:name="android.permission.USE_BIOMETRIC"/>' android/app/src/main/AndroidManifest.xml
           
-          # 6. إعدادات البصمة (هتشتغل المرة دي لأن المجلد بقى كوتلن بجد)
-          sed -i 's/FlutterActivity/FlutterFragmentActivity/g' android/app/src/main/kotlin/com/radwan/plus/MainActivity.kt
-          sed -i 's/import io.flutter.embedding.android.FlutterActivity/import io.flutter.embedding.android.FlutterFragmentActivity/g' android/app/src/main/kotlin/com/radwan/plus/MainActivity.kt
+          # 7. إعدادات البصمة (FlutterFragmentActivity)
+          # بما أننا قمنا بعمل flutter create، نحتاج للتأكد من المسار الصحيح
+          MAIN_ACTIVITY_PATH=$(find android/app/src/main/kotlin -name "MainActivity.kt")
+          if [ -f "$MAIN_ACTIVITY_PATH" ]; then
+            sed -i 's/FlutterActivity/FlutterFragmentActivity/g' "$MAIN_ACTIVITY_PATH"
+            sed -i 's/import io.flutter.embedding.android.FlutterActivity/import io.flutter.embedding.android.FlutterFragmentActivity/g' "$MAIN_ACTIVITY_PATH"
+          fi
 
       - name: Clean and Install Dependencies
         run: |
