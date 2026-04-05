@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:ui';
 import 'dart:typed_data'; 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart'; // <-- تم الإضافة عشان نتحكم في زر الخروج
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart' as yt;
 import 'package:dio/dio.dart';
@@ -12,6 +13,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:open_file_plus/open_file_plus.dart';
+
+// متغير عام للتحكم في المتصفح من أي مكان (عشان زر الرجوع)
+InAppWebViewController? globalBrowserController;
 
 // تعريف الوان الهوية للتطبيق
 class AppColors {
@@ -139,28 +143,55 @@ class _MainScreenState extends State<MainScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [AppColors.bgDark, AppColors.cardBg],
+    // إحاطة الشاشة بـ PopScope للتحكم في زر الرجوع
+    return PopScope(
+      canPop: false, 
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop) return;
+
+        // 1. لو إنت في المتصفح والموقع فيه صفحة سابقة، ارجع للموقع اللي قبله
+        if (_selectedIndex == 1 && globalBrowserController != null) {
+          if (await globalBrowserController!.canGoBack()) {
+            globalBrowserController!.goBack();
+            return;
+          }
+        }
+
+        // 2. لو إنت في أي قسم غير الرئيسية، ارجع للرئيسية بدل ما تقفل التطبيق
+        if (_selectedIndex != 0) {
+          setState(() {
+            _selectedIndex = 0;
+            _pageController.jumpToPage(0);
+          });
+          return;
+        }
+
+        // 3. لو إنت في الرئيسية ومفيش حاجة وراك، اقفل التطبيق
+        SystemNavigator.pop();
+      },
+      child: Scaffold(
+        body: Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [AppColors.bgDark, AppColors.cardBg],
+            ),
+          ),
+          child: PageView(
+            controller: _pageController,
+            physics: const NeverScrollableScrollPhysics(), 
+            onPageChanged: (index) => setState(() => _selectedIndex = index),
+            children: const [
+              HomePage(),
+              BrowserPage(),
+              DownloadsPage(),
+              SettingsPage(),
+            ],
           ),
         ),
-        child: PageView(
-          controller: _pageController,
-          physics: const NeverScrollableScrollPhysics(), 
-          onPageChanged: (index) => setState(() => _selectedIndex = index),
-          children: const [
-            HomePage(),
-            BrowserPage(),
-            DownloadsPage(),
-            SettingsPage(),
-          ],
-        ),
+        bottomNavigationBar: _buildGlassBottomNav(),
       ),
-      bottomNavigationBar: _buildGlassBottomNav(),
     );
   }
 
@@ -413,17 +444,36 @@ class _BrowserPageState extends State<BrowserPage> {
                 javaScriptEnabled: true,
                 verticalScrollBarEnabled: true,
                 horizontalScrollBarEnabled: false, 
+                // الضربة الأولى للإعلانات: منع النوافذ المنبثقة اللي بتفتح فجأة
+                supportMultipleWindows: false, 
+                javaScriptCanOpenWindowsAutomatically: false, 
                 userAgent: _desktopMode ? "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36" : "Mozilla/5.0 (Linux; Android 13) Chrome/116.0.0.0 Mobile Safari/537.36",
                 builtInZoomControls: true, 
                 displayZoomControls: false,
                 supportZoom: true,
               ),
-              onWebViewCreated: (controller) => webViewController = controller,
+              onWebViewCreated: (controller) {
+                // ربط المتصفح بالمتغير العام عشان زر الرجوع
+                globalBrowserController = controller; 
+                webViewController = controller;
+              },
               onProgressChanged: (c, p) => setState(() => _progress = p / 100),
-              shouldInterceptRequest: (controller, request) async {
+              onLoadStop: (controller, url) async {
+                // الضربة التانية للإعلانات: حقن كود جافاسكريبت يمسح مساحة الإعلان من الموقع نفسه!
                 if (_adBlockEnabled) {
-                  final url = request.url.toString();
-                  final adHosts = ["ads.", "googleads", "doubleclick", "pop-under", "banner", "analytics"];
+                  await controller.evaluateJavascript(source: """
+                    var style = document.createElement('style');
+                    style.type = 'text/css';
+                    style.innerHTML = '.ad, .ads, .banner, .pop-up, iframe[src*="ads"], [class*="ad-"], [id*="ad-"] { display: none !important; }';
+                    document.head.appendChild(style);
+                  """);
+                }
+              },
+              shouldInterceptRequest: (controller, request) async {
+                // الضربة التالتة للإعلانات: قائمة سوداء قوية جداً لسيرفرات الإعلانات
+                if (_adBlockEnabled) {
+                  final url = request.url.toString().toLowerCase();
+                  final adHosts = ["ads", "adsystem", "popunder", "propellerads", "exoclick", "doubleclick", "analytics", "tracker", "adserver", "syndication"];
                   if (adHosts.any((host) => url.contains(host))) {
                     return WebResourceResponse(contentType: "text/plain", data: Uint8List(0));
                   }
@@ -442,7 +492,6 @@ class _BrowserPageState extends State<BrowserPage> {
       icon: const Icon(Icons.more_vert, color: AppColors.primary),
       color: AppColors.cardBg,
       offset: const Offset(0, 50),
-      // تم التصحيح هنا: استخدام side بدلاً من border
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15), side: const BorderSide(color: AppColors.border, width: 1)),
       onSelected: (value) async {
         switch (value) {
@@ -538,7 +587,6 @@ class _DownloadsPageState extends State<DownloadsPage> {
         return Card(
           color: AppColors.cardBg,
           elevation: 0,
-          // تم التصحيح هنا: استخدام side بدلاً من border
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15), side: const BorderSide(color: AppColors.border, width: 0.5)),
           child: ListTile(
             contentPadding: const EdgeInsets.all(15),
@@ -607,7 +655,6 @@ class _SettingsPageState extends State<SettingsPage> {
           Card(
             color: AppColors.cardBg,
             elevation: 0,
-            // تم التصحيح هنا: استخدام side بدلاً من border
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15), side: const BorderSide(color: AppColors.border, width: 0.5)),
             child: Column(
               children: [
@@ -624,3 +671,4 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 }
+
