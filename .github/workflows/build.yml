@@ -34,11 +34,10 @@ jobs:
           # 2. إجبار فلاتر على بناء مجلد جديد بلغة Kotlin
           flutter create --platforms android -a kotlin --org com.radwan --project-name plus .
           
-          # 3. ترقية الكوتلن
-          sed -i 's/id "org.jetbrains.kotlin.android" version .*/id "org.jetbrains.kotlin.android" version "1.9.24" apply false/g' android/settings.gradle
-          sed -i 's/ext.kotlin_version = .*/ext.kotlin_version = "1.9.24"/g' android/build.gradle || true
+          # 3. ترقية الكوتلن بشكل قاطع (الحل الجذري لخطأ الإصدار 1.6.0)
+          sed -i -E 's/id "org\.jetbrains\.kotlin\.android" version "[^"]*"/id "org.jetbrains.kotlin.android" version "1.9.24"/g' android/settings.gradle
           
-          # 4. ترقية SDK للتطبيق الرئيسي فقط (بدون التعديل في الـ Root عشان ميزعلش Gradle)
+          # 4. ترقية SDK للتطبيق
           sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 35/g' android/app/build.gradle
           sed -i 's/compileSdk flutter.compileSdkVersion/compileSdk 35/g' android/app/build.gradle
           sed -i 's/targetSdk = flutter.targetSdkVersion/targetSdk = 35/g' android/app/build.gradle
@@ -78,4 +77,3 @@ jobs:
         with:
           name: R_MediaHunter_APK_Signed
           path: build/app/outputs/flutter-apk/app-release.apk
-
