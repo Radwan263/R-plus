@@ -25,7 +25,7 @@ dependencies:
   flutter_local_notifications: ^17.0.0
   open_file_plus: ^3.3.1
 
-# ☢️ السلاح السري لإخضاع أي مكتبة بتستدعي package_info_plus في الخفاء
+# إخضاع أي مكتبة مخفية
 dependency_overrides:
   package_info_plus: ^8.1.2
 
