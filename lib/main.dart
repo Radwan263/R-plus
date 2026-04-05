@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:ui';
+import 'dart:typed_data'; 
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart' as yt;
@@ -11,7 +12,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:video_player/video_player.dart';
 import 'package:chewie/chewie.dart';
 import 'package:local_auth/local_auth.dart';
-
 import 'package:url_launcher/url_launcher.dart';
 import 'package:open_file_plus/open_file_plus.dart';
 
@@ -25,7 +25,6 @@ void main() async {
 
 class RMediaHunterApp extends StatelessWidget {
   const RMediaHunterApp({super.key});
-
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -56,14 +55,12 @@ class RMediaHunterApp extends StatelessWidget {
 // -----------------------------------------------------------------------------
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
-
   @override
   State<SplashScreen> createState() => _SplashScreenState();
 }
 
 class _SplashScreenState extends State<SplashScreen> {
   final LocalAuthentication auth = LocalAuthentication();
-
   @override
   void initState() {
     super.initState();
@@ -73,16 +70,15 @@ class _SplashScreenState extends State<SplashScreen> {
   Future<void> _checkSecurity() async {
     final prefs = await SharedPreferences.getInstance();
     bool isLocked = prefs.getBool('app_lock') ?? false;
-
     if (isLocked) {
       try {
         bool authenticated = await auth.authenticate(
           localizedReason: 'يرجى المصادقة لفتح تطبيق R-Plus',
-          options: const AuthenticationOptions(stickyAuth: true, biometricsOnly: true),
+          options: const AuthenticationOptions(stickyAuth: true), 
         );
         if (authenticated) _goMain();
       } catch (e) {
-        _goMain(); // في حال فشل المستشعر
+        _goMain(); 
       }
     } else {
       Future.delayed(const Duration(seconds: 2), _goMain);
@@ -124,7 +120,6 @@ class MainScreen extends StatefulWidget {
 class _MainScreenState extends State<MainScreen> {
   int _selectedIndex = 0;
   final PageController _pageController = PageController();
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -187,7 +182,7 @@ class _MainScreenState extends State<MainScreen> {
 }
 
 // -----------------------------------------------------------------------------
-// محرك التحميل المتطور (Advanced Download Engine)
+// محرك التحميل المتطور
 // -----------------------------------------------------------------------------
 class DownloadManager {
   static final DownloadManager _instance = DownloadManager._internal();
@@ -203,7 +198,6 @@ class DownloadManager {
     final savePath = "${dir.path}/$fileName";
     final cancelToken = CancelToken();
     _activeDownloads[url] = cancelToken;
-
     try {
       await _dio.download(
         url,
@@ -232,7 +226,7 @@ class DownloadManager {
 }
 
 // -----------------------------------------------------------------------------
-// شاشة الرئيسية (Home)
+// شاشة الرئيسية
 // -----------------------------------------------------------------------------
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -244,7 +238,6 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   final TextEditingController _urlController = TextEditingController();
   bool _isAnalyzing = false;
-
   Future<void> _analyzeUrl() async {
     String url = _urlController.text.trim();
     if (url.isEmpty) return;
@@ -293,7 +286,6 @@ class _HomePageState extends State<HomePage> {
 
   void _startDownload(String title, String url) {
     DownloadManager().startDownload(url, "${title.replaceAll(' ', '_')}.mp4", (p) {
-      // تحديث الواجهة في حال كنت في شاشة التحميلات
     }, () {
       _showSmartSnackBar("اكتمل التحميل!", Icons.check_circle, Colors.green);
     });
@@ -337,11 +329,10 @@ class _HomePageState extends State<HomePage> {
 }
 
 // -----------------------------------------------------------------------------
-// المتصفح مع مانع إعلانات (Browser with Ad-Blocker)
+// المتصفح مع مانع إعلانات
 // -----------------------------------------------------------------------------
 class BrowserPage extends StatefulWidget {
   const BrowserPage({super.key});
-
   @override
   State<BrowserPage> createState() => _BrowserPageState();
 }
@@ -349,7 +340,6 @@ class BrowserPage extends StatefulWidget {
 class _BrowserPageState extends State<BrowserPage> {
   InAppWebViewController? webViewController;
   double _progress = 0;
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -367,7 +357,6 @@ class _BrowserPageState extends State<BrowserPage> {
               onWebViewCreated: (controller) => webViewController = controller,
               onProgressChanged: (c, p) => setState(() => _progress = p / 100),
               shouldInterceptRequest: (controller, request) async {
-                // مانع إعلانات بسيط: حجب الروابط التي تحتوي على كلمات إعلانية
                 final url = request.url.toString();
                 if (url.contains("ads") || url.contains("doubleclick") || url.contains("pop-under")) {
                   return WebResourceResponse(contentType: "text/plain", data: Uint8List(0));
@@ -383,18 +372,16 @@ class _BrowserPageState extends State<BrowserPage> {
 }
 
 // -----------------------------------------------------------------------------
-// التحميلات مع مشغل فيديو (Downloads with Player)
+// التحميلات مع مشغل فيديو
 // -----------------------------------------------------------------------------
 class DownloadsPage extends StatefulWidget {
   const DownloadsPage({super.key});
-
   @override
   State<DownloadsPage> createState() => _DownloadsPageState();
 }
 
 class _DownloadsPageState extends State<DownloadsPage> {
   List<FileSystemEntity> _files = [];
-
   @override
   void initState() {
     super.initState();
@@ -484,18 +471,16 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
 }
 
 // -----------------------------------------------------------------------------
-// الإعدادات (Settings) - قفل التطبيق والتحديثات
+// الإعدادات
 // -----------------------------------------------------------------------------
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
-
   @override
   State<SettingsPage> createState() => _SettingsPageState();
 }
 
 class _SettingsPageState extends State<SettingsPage> {
   bool _isLocked = false;
-
   @override
   void initState() {
     super.initState();
@@ -514,7 +499,6 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   Future<void> _checkUpdate() async {
-    // محاكاة فحص التحديث من GitHub
     _showUpdateDialog();
   }
 
