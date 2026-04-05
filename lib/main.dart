@@ -20,7 +20,7 @@ class AppColors {
   static const Color cardBg = Color(0xFF161B22);
   static const Color border = Color(0xFF30363D);
   static const Color textMain = Color(0xFFC9D1D9);
-  static const Color telegramBlue = Color(0xFF229ED9); // لون تليجرام الرسمي
+  static const Color telegramBlue = Color(0xFF229ED9);
 }
 
 void main() async {
@@ -61,9 +61,6 @@ class RMediaHunterApp extends StatelessWidget {
   }
 }
 
-// -----------------------------------------------------------------------------
-// شاشة البداية مع نظام القفل (Slash & Security)
-// -----------------------------------------------------------------------------
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
   @override
@@ -89,7 +86,7 @@ class _SplashScreenState extends State<SplashScreen> {
         );
         if (authenticated) _goMain();
       } catch (e) {
-        _goMain(); // في حال فشل المستشعر
+        _goMain(); 
       }
     } else {
       Future.delayed(const Duration(seconds: 2), _goMain);
@@ -130,9 +127,6 @@ class _SplashScreenState extends State<SplashScreen> {
   }
 }
 
-// -----------------------------------------------------------------------------
-// الشاشة الرئيسية ونظام التنقل
-// -----------------------------------------------------------------------------
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
   @override
@@ -156,7 +150,6 @@ class _MainScreenState extends State<MainScreen> {
         ),
         child: PageView(
           controller: _pageController,
-          // حل مشكلة السحب (Swipe): منع السحب في جميع الأقسام عشان نحصر المتصفح
           physics: const NeverScrollableScrollPhysics(), 
           onPageChanged: (index) => setState(() => _selectedIndex = index),
           children: const [
@@ -181,7 +174,7 @@ class _MainScreenState extends State<MainScreen> {
         currentIndex: _selectedIndex,
         onTap: (index) {
           setState(() => _selectedIndex = index);
-          _pageController.jumpToPage(index); // استخدام jump عشان نمنع الـ animation والسحب
+          _pageController.jumpToPage(index); 
         },
         backgroundColor: Colors.transparent,
         elevation: 0,
@@ -200,9 +193,6 @@ class _MainScreenState extends State<MainScreen> {
   }
 }
 
-// -----------------------------------------------------------------------------
-// مدير التحميل الذكي (Smart Download Manager)
-// -----------------------------------------------------------------------------
 class DownloadManager {
   static final DownloadManager _instance = DownloadManager._internal();
   factory DownloadManager() => _instance;
@@ -210,18 +200,15 @@ class DownloadManager {
   final Dio _dio = Dio();
 
   Future<void> startDownload(BuildContext context, String url, String fileName, bool isAudio) async {
-    // إخطار لبدء التحميل
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text("بدء صيد ${isAudio ? 'الصوت' : 'الفيديو'}... المرجو عدم إغلاق التطبيق"),
       backgroundColor: isAudio ? AppColors.telegramBlue : AppColors.primary,
       behavior: SnackBarBehavior.floating,
     ));
 
-    // التحقق من الصلاحيات
     var status = await Permission.storage.request();
     if (!status.isGranted) return;
 
-    // الحصول على مسار التحميل (Downloads Folder)
     String savePath = "/storage/emulated/0/Download/$fileName";
     
     try {
@@ -229,13 +216,10 @@ class DownloadManager {
         url,
         savePath,
         onReceiveProgress: (received, total) {
-          if (total != -1) {
-            // إمكانية إضافة شريط تقدم هنا في المستقبل
-          }
+          if (total != -1) {}
         },
       );
 
-      // إخطار باكتمال التحميل
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Row(children: [Icon(Icons.check_circle, color: Colors.white), SizedBox(width: 10), Text("اكتمل التحميل! فحص المجلد.")]),
@@ -255,9 +239,6 @@ class DownloadManager {
   }
 }
 
-// -----------------------------------------------------------------------------
-// الشاشة الرئيسية - محلل الروابط وصائد الفيديوهات
-// -----------------------------------------------------------------------------
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
   @override
@@ -268,7 +249,6 @@ class _HomePageState extends State<HomePage> {
   final TextEditingController _urlController = TextEditingController();
   bool _isAnalyzing = false;
   
-  // حل مشكلة تحميل يوتيوب: تحليل وجلب الجودة
   Future<void> _analyzeUrl() async {
     String url = _urlController.text.trim();
     if (url.isEmpty) return;
@@ -280,19 +260,15 @@ class _HomePageState extends State<HomePage> {
         final video = await ytInstance.videos.get(url);
         final manifest = await ytInstance.videos.streamsClient.getManifest(video.id);
         
-        // جلب جودة الفيديو الأساسية (MP4 Muxed)
         final videoStream = manifest.muxed.withHighestBitrate();
-        // جلب جودة الصوت الأساسية (M4A/Audio) وحفظها كـ MP3
         final audioStream = manifest.audioOnly.withHighestBitrate();
         
         ytInstance.close();
         
         if (mounted) {
-          // حل مشكلة التحميل الوهمي: عرض قائمة خيارات
           _showDownloadOptionsSheet(context, video.title, videoStream.url.toString(), audioStream.url.toString());
         }
       } else {
-        // الروابط العامة (تتطلب معالجة إضافية في المستقبل)
         DownloadManager().startDownload(context, url, "hunter_download_${DateTime.now().millisecond}.mp4", false);
       }
     } catch (e) {
@@ -304,7 +280,6 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  // قائمة منبثقة لاختيار نوع التحميل (يوتيوب)
   void _showDownloadOptionsSheet(BuildContext context, String title, String videoUrl, String audioUrl) {
     showModalBottomSheet(
       context: context,
@@ -330,7 +305,6 @@ class _HomePageState extends State<HomePage> {
             const SizedBox(height: 15),
             _buildGlassOptionCard(context, Icons.music_note_rounded, "تحميل صوت (MP3)", "صوت عالي الجودة M4A", AppColors.telegramBlue, () {
               Navigator.pop(context);
-              // حل مشكلة MP3: حفظ كـ MP3 وهو فعلياً M4A
               DownloadManager().startDownload(context, audioUrl, "${title.replaceAll(' ', '_')}.mp3", true);
             }),
             const SizedBox(height: 10),
@@ -375,7 +349,6 @@ class _HomePageState extends State<HomePage> {
             children: [
               const Icon(Icons.auto_fix_high_rounded, size: 80, color: AppColors.primary),
               const SizedBox(height: 40),
-              // حقل إدخال الرابط بتصميم مودرن
               Container(
                 decoration: BoxDecoration(
                   color: AppColors.cardBg,
@@ -406,9 +379,6 @@ class _HomePageState extends State<HomePage> {
   }
 }
 
-// -----------------------------------------------------------------------------
-// شاشة المتصفح الذكي - تحديث كامل وحل مشاكل 3
-// -----------------------------------------------------------------------------
 class BrowserPage extends StatefulWidget {
   const BrowserPage({super.key});
   @override
@@ -418,8 +388,8 @@ class BrowserPage extends StatefulWidget {
 class _BrowserPageState extends State<BrowserPage> {
   InAppWebViewController? webViewController;
   double _progress = 0;
-  bool _adBlockEnabled = true; // حالة مانع الإعلانات
-  bool _desktopMode = false;   // حالة وضع سطح المكتب
+  bool _adBlockEnabled = true; 
+  bool _desktopMode = false;   
   final String _initialUrl = "https://www.google.com";
 
   @override
@@ -428,10 +398,8 @@ class _BrowserPageState extends State<BrowserPage> {
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         title: const Text("المتصفح الذكي", style: TextStyle(fontWeight: FontWeight.bold)),
-        // حل مشكلة السحب للأسفل: تأكدنا إن الـ AppBar شفافة
         flexibleSpace: Container(decoration: const BoxDecoration(color: AppColors.cardBg)),
         actions: [
-          // حل مشكلة القائمة (النقط الثلاث)
           _buildBrowserPopupMenu(),
         ],
       ),
@@ -443,10 +411,8 @@ class _BrowserPageState extends State<BrowserPage> {
               initialUrlRequest: URLRequest(url: WebUri(_initialUrl)),
               initialSettings: InAppWebViewSettings(
                 javaScriptEnabled: true,
-                // حل مشكلة السحب للأسفل: التأكد من تفعيل التفاعل العمودي
                 verticalScrollBarEnabled: true,
                 horizontalScrollBarEnabled: false, 
-                // إعدادات الوضع (جوال/سطح مكتب)
                 userAgent: _desktopMode ? "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36" : "Mozilla/5.0 (Linux; Android 13) Chrome/116.0.0.0 Mobile Safari/537.36",
                 builtInZoomControls: true, 
                 displayZoomControls: false,
@@ -455,7 +421,6 @@ class _BrowserPageState extends State<BrowserPage> {
               onWebViewCreated: (controller) => webViewController = controller,
               onProgressChanged: (c, p) => setState(() => _progress = p / 100),
               shouldInterceptRequest: (controller, request) async {
-                // مانع إعلانات محسّن وتفاعلي
                 if (_adBlockEnabled) {
                   final url = request.url.toString();
                   final adHosts = ["ads.", "googleads", "doubleclick", "pop-under", "banner", "analytics"];
@@ -472,22 +437,21 @@ class _BrowserPageState extends State<BrowserPage> {
     );
   }
 
-  // حل مشكلة قائمة النقط الثلاث بتصميم مودرن
   Widget _buildBrowserPopupMenu() {
     return PopupMenuButton<String>(
       icon: const Icon(Icons.more_vert, color: AppColors.primary),
       color: AppColors.cardBg,
       offset: const Offset(0, 50),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15), border: const Border.all(color: AppColors.border)),
+      // تم التصحيح هنا: استخدام side بدلاً من border
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15), side: const BorderSide(color: AppColors.border, width: 1)),
       onSelected: (value) async {
         switch (value) {
           case 'toggle_adblock':
             setState(() => _adBlockEnabled = !_adBlockEnabled);
-            await webViewController?.reload(); // إعادة التحميل لتطبيق الإعداد الجديد
+            await webViewController?.reload(); 
             break;
           case 'toggle_desktop':
             setState(() => _desktopMode = !_desktopMode);
-            // تحديث الإعدادات ديناميكياً
             var settings = await webViewController?.getSettings();
             settings?.userAgent = _desktopMode ? "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36" : "Mozilla/5.0 (Linux; Android 13) Chrome/116.0.0.0 Mobile Safari/537.36";
             if (settings != null) {
@@ -518,9 +482,6 @@ class _BrowserPageState extends State<BrowserPage> {
   }
 }
 
-// -----------------------------------------------------------------------------
-// شاشة التحميلات - عرض الملفات المحملة
-// -----------------------------------------------------------------------------
 class DownloadsPage extends StatefulWidget {
   const DownloadsPage({super.key});
   @override
@@ -537,7 +498,6 @@ class _DownloadsPageState extends State<DownloadsPage> {
     _loadFiles();
   }
   
-  // تحميل الملفات من مجلد Download الخاص بالجهاز
   Future<void> _loadFiles() async {
     setState(() => _isLoading = true);
     final dir = Directory("/storage/emulated/0/Download");
@@ -546,7 +506,6 @@ class _DownloadsPageState extends State<DownloadsPage> {
       return;
     }
     
-    // فلترة الملفات الخاصة بتطبيق MediaHunter فقط
     final List<FileSystemEntity> allFiles = dir.listSync();
     setState(() {
       _files = allFiles.where((f) {
@@ -579,13 +538,13 @@ class _DownloadsPageState extends State<DownloadsPage> {
         return Card(
           color: AppColors.cardBg,
           elevation: 0,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15), border: const Border.all(color: AppColors.border, width: 0.5)),
+          // تم التصحيح هنا: استخدام side بدلاً من border
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15), side: const BorderSide(color: AppColors.border, width: 0.5)),
           child: ListTile(
             contentPadding: const EdgeInsets.all(15),
             leading: Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: (isVideo ? AppColors.primary : AppColors.telegramBlue).withOpacity(0.1), borderRadius: BorderRadius.circular(10)), child: Icon(isVideo ? Icons.movie_rounded : Icons.music_note_rounded, color: isVideo ? AppColors.primary : AppColors.telegramBlue, size: 28)),
             title: Text(file.path.split('/').last, style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white), maxLines: 2, overflow: TextOverflow.ellipsis),
             onTap: () async {
-              // فتح الفيديو بمشغل الموبايل الأساسي
               await OpenFile.open(file.path);
             },
             trailing: IconButton(icon: const Icon(Icons.delete_forever, color: Colors.red), onPressed: () async {
@@ -599,9 +558,6 @@ class _DownloadsPageState extends State<DownloadsPage> {
   }
 }
 
-// -----------------------------------------------------------------------------
-// شاشة الإعدادات وحل مشكلة 4 (عن المطور - رادوان محمد تليجرام)
-// -----------------------------------------------------------------------------
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
   @override
@@ -625,7 +581,6 @@ class _SettingsPageState extends State<SettingsPage> {
     setState(() => _isLocked = val);
   }
   
-  // دالة لفتح رابط تليجرام
   Future<void> _launchTelegram() async {
     final Uri url = Uri.parse("https://t.me/Radwan263");
     if (!await launchUrl(url, mode: LaunchMode.externalApplication)) {
@@ -642,24 +597,23 @@ class _SettingsPageState extends State<SettingsPage> {
       body: ListView(
         padding: const EdgeInsets.all(15),
         children: [
-          // قفل التطبيق
           SwitchListTile(title: const Text("قفل التطبيق (بصمة الإصبع)"), subtitle: const Text("حماية خصوصيتك وتحميلاتك"), value: _isLocked, onChanged: _toggleLock, secondary: const Icon(Icons.fingerprint), activeColor: AppColors.primary, activeTrackColor: AppColors.primary.withOpacity(0.3), tileColor: AppColors.cardBg, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15))),
           const SizedBox(height: 25),
           const Divider(color: AppColors.border),
           const SizedBox(height: 25),
           
-          // حل مشكلة 4: قسم "عن المطور" المحدّث وتليجرام
           const Text("حول التطبيق والمطور", style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold, fontSize: 16)),
           const SizedBox(height: 15),
           Card(
             color: AppColors.cardBg,
             elevation: 0,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15), border: const Border.all(color: AppColors.border, width: 0.5)),
+            // تم التصحيح هنا: استخدام side بدلاً من border
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15), side: const BorderSide(color: AppColors.border, width: 0.5)),
             child: Column(
               children: [
                 const ListTile(title: Text("اسم المطور", style: TextStyle(color: AppColors.textMain)), trailing: Text("Radwan Mohamed", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 16)), leading: Icon(Icons.person_rounded, color: AppColors.primary)),
                 const PopupMenuDivider(height: 0.5),
-                ListTile(title: const Text("تليجرام المطور (اضغط للتواصل)", style: TextStyle(color: AppColors.textMain)), trailing: const Text("@Radwan263", style: TextStyle(fontWeight: FontWeight.bold, color: AppColors.telegramBlue, fontSize: 16)), leading: Container(width: 28, height: 28, decoration: const BoxDecoration(image: DecorationImage(image: NetworkImage("https://upload.wikimedia.org/wikipedia/commons/d/dd/Telegram_logo.svg")), color: Colors.transparent)), onTap: _launchTelegram), // فتح التليجرام عند الضغط
+                ListTile(title: const Text("تليجرام المطور (اضغط للتواصل)", style: TextStyle(color: AppColors.textMain)), trailing: const Text("@Radwan263", style: TextStyle(fontWeight: FontWeight.bold, color: AppColors.telegramBlue, fontSize: 16)), leading: Container(width: 28, height: 28, decoration: const BoxDecoration(image: DecorationImage(image: NetworkImage("https://upload.wikimedia.org/wikipedia/commons/d/dd/Telegram_logo.svg")), color: Colors.transparent)), onTap: _launchTelegram), 
                 const PopupMenuDivider(height: 0.5),
                 const ListTile(title: Text("نسخة التطبيق", style: TextStyle(color: AppColors.textMain)), trailing: Text("v1.1.0 Stable", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.green)), leading: Icon(Icons.info_outline_rounded, color: AppColors.textMain)),
               ],
@@ -668,17 +622,5 @@ class _SettingsPageState extends State<SettingsPage> {
         ],
       ),
     );
-  }
-}
-
-// -----------------------------------------------------------------------------
-// مكونات واجهة - Glass Sheet
-// -----------------------------------------------------------------------------
-class _GlassSheet extends StatelessWidget {
-  final Widget child;
-  const _GlassSheet({required this.child});
-  @override
-  Widget build(BuildContext context) {
-    return Container(padding: const EdgeInsets.all(24), decoration: const BoxDecoration(color: Color(0xFF161B22), borderRadius: BorderRadius.vertical(top: Radius.circular(30))), child: child);
   }
 }
