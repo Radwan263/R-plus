@@ -9,8 +9,6 @@ import 'package:dio/dio.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:video_player/video_player.dart';
-import 'package:chewie/chewie.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:open_file_plus/open_file_plus.dart';
@@ -50,9 +48,6 @@ class RMediaHunterApp extends StatelessWidget {
   }
 }
 
-// -----------------------------------------------------------------------------
-// شاشة البداية مع نظام القفل (Splash & Security)
-// -----------------------------------------------------------------------------
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
   @override
@@ -112,7 +107,6 @@ class _SplashScreenState extends State<SplashScreen> {
 
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
-
   @override
   State<MainScreen> createState() => _MainScreenState();
 }
@@ -181,14 +175,10 @@ class _MainScreenState extends State<MainScreen> {
   }
 }
 
-// -----------------------------------------------------------------------------
-// محرك التحميل المتطور
-// -----------------------------------------------------------------------------
 class DownloadManager {
   static final DownloadManager _instance = DownloadManager._internal();
   factory DownloadManager() => _instance;
   DownloadManager._internal();
-
   final Dio _dio = Dio();
   final Map<String, CancelToken> _activeDownloads = {};
   final Map<String, double> _progressMap = {};
@@ -218,19 +208,14 @@ class DownloadManager {
       rethrow;
     }
   }
-
   void cancelDownload(String url) {
     _activeDownloads[url]?.cancel();
     _activeDownloads.remove(url);
   }
 }
 
-// -----------------------------------------------------------------------------
-// شاشة الرئيسية
-// -----------------------------------------------------------------------------
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
-
   @override
   State<HomePage> createState() => _HomePageState();
 }
@@ -238,10 +223,10 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   final TextEditingController _urlController = TextEditingController();
   bool _isAnalyzing = false;
+  
   Future<void> _analyzeUrl() async {
     String url = _urlController.text.trim();
     if (url.isEmpty) return;
-
     setState(() => _isAnalyzing = true);
     try {
       if (url.contains("youtube.com") || url.contains("youtu.be")) {
@@ -285,20 +270,13 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _startDownload(String title, String url) {
-    DownloadManager().startDownload(url, "${title.replaceAll(' ', '_')}.mp4", (p) {
-    }, () {
+    DownloadManager().startDownload(url, "${title.replaceAll(' ', '_')}.mp4", (p) {}, () {
       _showSmartSnackBar("اكتمل التحميل!", Icons.check_circle, Colors.green);
     });
   }
 
   void _showSmartSnackBar(String message, IconData icon, Color color) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Row(children: [Icon(icon, color: Colors.white), const SizedBox(width: 10), Text(message)]),
-        backgroundColor: color,
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Row(children: [Icon(icon, color: Colors.white), const SizedBox(width: 10), Text(message)]), backgroundColor: color, behavior: SnackBarBehavior.floating));
   }
 
   @override
@@ -319,18 +297,11 @@ class _HomePageState extends State<HomePage> {
       ),
     );
   }
-
   Widget _buildGlassInput() {
-    return Container(
-      decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(15)),
-      child: TextField(controller: _urlController, decoration: const InputDecoration(hintText: "ضع الرابط هنا", border: InputBorder.none, contentPadding: EdgeInsets.all(15))),
-    );
+    return Container(decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(15)), child: TextField(controller: _urlController, decoration: const InputDecoration(hintText: "ضع الرابط هنا", border: InputBorder.none, contentPadding: EdgeInsets.all(15))));
   }
 }
 
-// -----------------------------------------------------------------------------
-// المتصفح مع مانع إعلانات
-// -----------------------------------------------------------------------------
 class BrowserPage extends StatefulWidget {
   const BrowserPage({super.key});
   @override
@@ -350,10 +321,7 @@ class _BrowserPageState extends State<BrowserPage> {
           Expanded(
             child: InAppWebView(
               initialUrlRequest: URLRequest(url: WebUri("https://www.google.com")),
-              initialSettings: InAppWebViewSettings(
-                javaScriptEnabled: true,
-                userAgent: "Mozilla/5.0 (Linux; Android 13) Chrome/116.0.0.0 Mobile Safari/537.36",
-              ),
+              initialSettings: InAppWebViewSettings(javaScriptEnabled: true, userAgent: "Mozilla/5.0 (Linux; Android 13) Chrome/116.0.0.0 Mobile Safari/537.36"),
               onWebViewCreated: (controller) => webViewController = controller,
               onProgressChanged: (c, p) => setState(() => _progress = p / 100),
               shouldInterceptRequest: (controller, request) async {
@@ -371,9 +339,6 @@ class _BrowserPageState extends State<BrowserPage> {
   }
 }
 
-// -----------------------------------------------------------------------------
-// التحميلات مع مشغل فيديو
-// -----------------------------------------------------------------------------
 class DownloadsPage extends StatefulWidget {
   const DownloadsPage({super.key});
   @override
@@ -387,92 +352,35 @@ class _DownloadsPageState extends State<DownloadsPage> {
     super.initState();
     _loadFiles();
   }
-
+  
   Future<void> _loadFiles() async {
     final dir = await getApplicationDocumentsDirectory();
-    setState(() {
-      _files = dir.listSync().where((f) => f.path.endsWith(".mp4")).toList();
-    });
+    setState(() { _files = dir.listSync().where((f) => f.path.endsWith(".mp4")).toList(); });
   }
-
+  
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text("التحميلات"), backgroundColor: Colors.transparent),
-      body: _files.isEmpty 
-        ? const Center(child: Text("لا توجد تحميلات"))
-        : ListView.builder(
+      body: _files.isEmpty ? const Center(child: Text("لا توجد تحميلات")) : ListView.builder(
             itemCount: _files.length,
             itemBuilder: (context, index) {
               final file = _files[index];
               return ListTile(
                 leading: const Icon(Icons.video_library_rounded),
                 title: Text(file.path.split('/').last),
-                onTap: () => _playVideo(file.path),
-                trailing: IconButton(icon: const Icon(Icons.delete, color: Colors.red), onPressed: () {
-                  file.deleteSync();
-                  _loadFiles();
-                }),
+                onTap: () {
+                  // فتح الفيديو بمشغل الموبايل الأساسي
+                  OpenFilePlus.open(file.path);
+                },
+                trailing: IconButton(icon: const Icon(Icons.delete, color: Colors.red), onPressed: () { file.deleteSync(); _loadFiles(); }),
               );
             },
           ),
     );
   }
-
-  void _playVideo(String path) {
-    Navigator.push(context, MaterialPageRoute(builder: (context) => VideoPlayerScreen(path: path)));
-  }
 }
 
-class VideoPlayerScreen extends StatefulWidget {
-  final String path;
-  const VideoPlayerScreen({super.key, required this.path});
-
-  @override
-  State<VideoPlayerScreen> createState() => _VideoPlayerScreenState();
-}
-
-class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
-  late VideoPlayerController _videoPlayerController;
-  ChewieController? _chewieController;
-
-  @override
-  void initState() {
-    super.initState();
-    _initPlayer();
-  }
-
-  Future<void> _initPlayer() async {
-    _videoPlayerController = VideoPlayerController.file(File(widget.path));
-    await _videoPlayerController.initialize();
-    _chewieController = ChewieController(
-      videoPlayerController: _videoPlayerController,
-      autoPlay: true,
-      looping: false,
-      aspectRatio: _videoPlayerController.value.aspectRatio,
-    );
-    setState(() {});
-  }
-
-  @override
-  void dispose() {
-    _videoPlayerController.dispose();
-    _chewieController?.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: _chewieController != null ? Chewie(controller: _chewieController!) : const Center(child: CircularProgressIndicator()),
-    );
-  }
-}
-
-// -----------------------------------------------------------------------------
-// الإعدادات
-// -----------------------------------------------------------------------------
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
   @override
@@ -486,61 +394,28 @@ class _SettingsPageState extends State<SettingsPage> {
     super.initState();
     _loadSettings();
   }
-
   Future<void> _loadSettings() async {
     final prefs = await SharedPreferences.getInstance();
     setState(() => _isLocked = prefs.getBool('app_lock') ?? false);
   }
-
   Future<void> _toggleLock(bool val) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('app_lock', val);
     setState(() => _isLocked = val);
   }
-
   Future<void> _checkUpdate() async {
-    _showUpdateDialog();
+    showDialog(context: context, builder: (context) => AlertDialog(title: const Text("تحديث جديد متاح!"), content: const Text("نسخة v1.2.0 متوفرة الآن على GitHub. هل تريد التحديث؟"), actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text("لاحقاً")), ElevatedButton(onPressed: () => launchUrl(Uri.parse("https://github.com/Radwan263/R-plus/releases")), child: const Text("تحديث الآن"))]));
   }
-
-  void _showUpdateDialog() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text("تحديث جديد متاح!"),
-        content: const Text("نسخة v1.2.0 متوفرة الآن على GitHub. هل تريد التحديث؟"),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text("لاحقاً")),
-          ElevatedButton(onPressed: () => launchUrl(Uri.parse("https://github.com/Radwan263/R-plus/releases")), child: const Text("تحديث الآن")),
-        ],
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text("الإعدادات"), backgroundColor: Colors.transparent),
       body: ListView(
         children: [
-          SwitchListTile(
-            title: const Text("قفل التطبيق (بصمة الإصبع)"),
-            subtitle: const Text("حماية خصوصيتك وتحميلاتك"),
-            value: _isLocked,
-            onChanged: _toggleLock,
-            secondary: const Icon(Icons.fingerprint),
-          ),
-          ListTile(
-            title: const Text("التحقق من التحديثات"),
-            subtitle: const Text("نسخة التطبيق v1.1.0"),
-            leading: const Icon(Icons.system_update_rounded),
-            onTap: _checkUpdate,
-          ),
+          SwitchListTile(title: const Text("قفل التطبيق (بصمة الإصبع)"), subtitle: const Text("حماية خصوصيتك وتحميلاتك"), value: _isLocked, onChanged: _toggleLock, secondary: const Icon(Icons.fingerprint)),
+          ListTile(title: const Text("التحقق من التحديثات"), subtitle: const Text("نسخة التطبيق v1.1.0"), leading: const Icon(Icons.system_update_rounded), onTap: _checkUpdate),
           const Divider(),
-          ListTile(
-            title: const Text("عن المطور"),
-            subtitle: const Text("Radwan - R-Plus Hunter"),
-            leading: const Icon(Icons.info_outline_rounded),
-          ),
+          ListTile(title: const Text("عن المطور"), subtitle: const Text("Radwan - R-Plus Hunter"), leading: const Icon(Icons.info_outline_rounded)),
         ],
       ),
     );
@@ -555,3 +430,4 @@ class _GlassSheet extends StatelessWidget {
     return Container(padding: const EdgeInsets.all(24), decoration: const BoxDecoration(color: Color(0xFF161B22), borderRadius: BorderRadius.vertical(top: Radius.circular(30))), child: child);
   }
 }
+
