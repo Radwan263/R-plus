@@ -27,8 +27,11 @@ jobs:
 
       - name: Clean and Rebuild Android Structure
         run: |
-          # ترقية Kotlin وتعديل الإعدادات
-          sed -i 's/ext.kotlin_version = .*/ext.kotlin_version = "1.9.24"/' android/build.gradle
+          # التأكد من أن compileSdk و targetSdk هما 35 في build.gradle
+          sed -i 's/compileSdk .*/compileSdk 35/' android/app/build.gradle
+          sed -i 's/targetSdk .*/targetSdk 35/' android/app/build.gradle
+          sed -i 's/minSdk .*/minSdk 24/' android/app/build.gradle
+          
           # تغيير اسم التطبيق في Manifest
           sed -i 's/android:label=".*"/android:label="R_MediaHunter"/' android/app/src/main/AndroidManifest.xml
           # التأكد من وجود الصلاحيات الأساسية
