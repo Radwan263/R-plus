@@ -370,8 +370,8 @@ class _DownloadsPageState extends State<DownloadsPage> {
                 leading: const Icon(Icons.video_library_rounded),
                 title: Text(file.path.split('/').last),
                 onTap: () {
-                  // فتح الفيديو بمشغل الموبايل الأساسي
-                  OpenFilePlus.open(file.path);
+                  // فتح الفيديو بمشغل الموبايل الأساسي هنا
+                  OpenFile.open(file.path);
                 },
                 trailing: IconButton(icon: const Icon(Icons.delete, color: Colors.red), onPressed: () { file.deleteSync(); _loadFiles(); }),
               );
