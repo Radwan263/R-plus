@@ -27,18 +27,18 @@ jobs:
 
       - name: Force Kotlin and Rebuild Android
         run: |
-          # 1. إبادة المجلد القديم والذاكرة
+          # 1. إبادة المجلد القديم 
           rm -rf android
           rm -f .metadata
           
           # 2. إنشاء مجلد كوتلن جديد
           flutter create --platforms android -a kotlin --org com.radwan --project-name plus .
           
-          # 3. الضربة القاضية لتحديث الكوتلن في كل الملفات
+          # 3. تحديث الكوتلن بقوة
           sed -i -E 's/ext\.kotlin_version = .*/ext.kotlin_version = "1.9.24"/g' android/build.gradle
           sed -i -E 's/id "org\.jetbrains\.kotlin\.android" version "[^"]*"/id "org.jetbrains.kotlin.android" version "1.9.24"/g' android/settings.gradle || true
           
-          # 4. النزول للإصدار الذهبي 34 عشان ملفات المصادر (Resources) تتبني بدون أخطاء
+          # 4. النزول للإصدار الذهبي 34 للتطبيق الرئيسي
           sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 34/g' android/app/build.gradle
           sed -i 's/compileSdk flutter.compileSdkVersion/compileSdk 34/g' android/app/build.gradle
           sed -i 's/targetSdk = flutter.targetSdkVersion/targetSdk = 34/g' android/app/build.gradle
@@ -59,10 +59,23 @@ jobs:
 
       - name: Clean and Install Dependencies
         run: |
+          # تدمير كاش Gradle للتخلص من الكوتلن القديم
+          rm -rf ~/.gradle/caches
           rm -f pubspec.lock
           flutter clean
           flutter pub cache clean -f
           flutter pub get
+
+      - name: The Magic Hack (Force SDK 34 on ALL Plugins)
+        run: |
+          # تعديل مكتبات فلاتر الأساسية المحملة على السيرفر لتجاهل SDK 35
+          FLUTTER_DIR=$(dirname $(which flutter))/..
+          find $FLUTTER_DIR/packages -name "build.gradle" -exec sed -i 's/compileSdk = 35/compileSdk = 34/g' {} + || true
+          
+          # تعديل جميع المكتبات التي تم تحميلها من Pub
+          find ~/.pub-cache -name "build.gradle" -exec sed -i 's/compileSdk = 35/compileSdk = 34/g' {} + || true
+          find ~/.pub-cache -name "build.gradle" -exec sed -i 's/compileSdkVersion 35/compileSdkVersion 34/g' {} + || true
+          find ~/.pub-cache -name "build.gradle" -exec sed -i 's/compileSdk 35/compileSdk 34/g' {} + || true
 
       - name: Build APK
         run: flutter build apk --release --no-tree-shake-icons
