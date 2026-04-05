@@ -1,4 +1,4 @@
-name: r_cima_downloader
+name: plus
 description: A modern media downloader app.
 publish_to: 'none'
 version: 1.1.0+2
@@ -21,10 +21,13 @@ dependencies:
   video_player: ^2.8.2
   chewie: ^1.7.5
   local_auth: ^2.1.8
-
   url_launcher: ^6.2.5
   flutter_local_notifications: ^17.0.0
   open_file_plus: ^3.3.1
+
+# ☢️ السلاح السري لإخضاع أي مكتبة بتستدعي package_info_plus في الخفاء
+dependency_overrides:
+  package_info_plus: ^8.1.2
 
 dev_dependencies:
   flutter_test:
