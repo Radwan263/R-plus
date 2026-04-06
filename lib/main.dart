@@ -231,7 +231,17 @@ class ActiveDownload {
   final String fileName;
   double progress;
   String size;
-  ActiveDownload({required this.url, required this.fileName, this.progress = 0.0, this.size = "..."});
+  bool isCompleted;
+  bool isFailed;
+
+  ActiveDownload({
+    required this.url,
+    required this.fileName,
+    this.progress = 0.0,
+    this.size = "...",
+    this.isCompleted = false,
+    this.isFailed = false,
+  });
 }
 
 class DownloadManager {
@@ -242,18 +252,29 @@ class DownloadManager {
   final ValueNotifier<List<ActiveDownload>> activeDownloadsNotifier = ValueNotifier([]);
   VoidCallback? onDownloadComplete;
 
+  void clearCompleted() {
+    activeDownloadsNotifier.value = activeDownloadsNotifier.value.where((d) => !d.isCompleted && !d.isFailed).toList();
+  }
+
+  void removeDownload(String url) {
+    activeDownloadsNotifier.value = activeDownloadsNotifier.value.where((d) => d.url != url).toList();
+  }
+
   Future<void> startDownload(BuildContext context, String url, String fileName, bool isAudio) async {
+    // التأكد من عدم تحميل نفس الرابط مرتين في نفس الوقت
+    if (activeDownloadsNotifier.value.any((d) => d.url == url && !d.isCompleted)) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("هذا الرابط جاري تحميله بالفعل")));
+      return;
+    }
+
     try {
       if (Platform.isAndroid) {
-        // طلب الصلاحيات الأساسية
         await Permission.storage.request();
-        // طلب الوصول لجميع الملفات للأندرويد 11+ (اختياري ولكن مفيد لمجلد التحميلات العام)
         if (await Permission.manageExternalStorage.isDenied) {
           await Permission.manageExternalStorage.request();
         }
       }
 
-      // الحصول على مسار مجلد التحميلات بشكل آمن
       Directory? downloadsDir;
       if (Platform.isAndroid) {
         downloadsDir = Directory('/storage/emulated/0/Download');
@@ -270,10 +291,8 @@ class DownloadManager {
       
       if (!await rHunterDir.exists()) {
         await rHunterDir.create(recursive: true);
-        ErrorHunter.log("Folder_Status", "تم إنشاء مجلد R_Hunter بنجاح في: ${rHunterDir.path}");
       }
 
-      // تنظيف اسم الملف من أي رموز غريبة
       String cleanFileName = fileName.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
       String savePath = "${rHunterDir.path}/$cleanFileName";
 
@@ -299,7 +318,9 @@ class DownloadManager {
         activeDownloadsNotifier.value = List.from(activeDownloadsNotifier.value);
       });
       
-      activeDownloadsNotifier.value = activeDownloadsNotifier.value.where((d) => d.url != url).toList();
+      activeDl.isCompleted = true;
+      activeDl.progress = 1.0;
+      activeDownloadsNotifier.value = List.from(activeDownloadsNotifier.value);
       
       onDownloadComplete?.call(); 
       if (globalDownloadsKey.currentState != null) {
@@ -315,7 +336,11 @@ class DownloadManager {
       }
     } catch (e) {
       ErrorHunter.log("Downloader_Critical", e);
-      activeDownloadsNotifier.value = activeDownloadsNotifier.value.where((d) => d.url != url).toList();
+      // تحديث الحالة للفشل بدلاً من الحذف
+      var dl = activeDownloadsNotifier.value.firstWhere((d) => d.url == url);
+      dl.isFailed = true;
+      activeDownloadsNotifier.value = List.from(activeDownloadsNotifier.value);
+      
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text("حدث خطأ.. افتح تقرير صياد الأخطاء من الإعدادات"),
@@ -721,32 +746,63 @@ class DownloadsPageState extends State<DownloadsPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text("جاري التحميل...", style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold)),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text("قائمة العمليات الحالية", style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold)),
+                      TextButton.icon(
+                        onPressed: () => DownloadManager().clearCompleted(),
+                        icon: const Icon(Icons.cleaning_services_rounded, size: 16, color: Colors.grey),
+                        label: const Text("مسح المكتمل", style: TextStyle(color: Colors.grey, fontSize: 12)),
+                      )
+                    ],
+                  ),
                   const SizedBox(height: 10),
                   ...activeList.map((dl) => Card(
                     color: AppColors.cardBg,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15), side: const BorderSide(color: AppColors.primary, width: 1)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(15), 
+                      side: BorderSide(
+                        color: dl.isFailed ? Colors.red : (dl.isCompleted ? Colors.green : AppColors.primary), 
+                        width: 1
+                      )
+                    ),
                     child: Padding(
                       padding: const EdgeInsets.all(15),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(dl.fileName, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold), maxLines: 1, overflow: TextOverflow.ellipsis),
-                          const SizedBox(height: 10),
-                          LinearProgressIndicator(
-                            value: dl.progress == -1.0 ? null : dl.progress, 
-                            backgroundColor: AppColors.border, 
-                            color: AppColors.primary, 
-                            borderRadius: BorderRadius.circular(5), 
-                            minHeight: 8
+                          Row(
+                            children: [
+                              Expanded(child: Text(dl.fileName, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold), maxLines: 1, overflow: TextOverflow.ellipsis)),
+                              if (dl.isCompleted || dl.isFailed) 
+                                IconButton(
+                                  constraints: const BoxConstraints(),
+                                  padding: EdgeInsets.zero,
+                                  icon: const Icon(Icons.close, size: 18, color: Colors.grey), 
+                                  onPressed: () => DownloadManager().removeDownload(dl.url)
+                                ),
+                            ],
                           ),
+                          const SizedBox(height: 10),
+                          if (!dl.isCompleted && !dl.isFailed)
+                            LinearProgressIndicator(
+                              value: dl.progress == -1.0 ? null : dl.progress, 
+                              backgroundColor: AppColors.border, 
+                              color: AppColors.primary, 
+                              borderRadius: BorderRadius.circular(5), 
+                              minHeight: 8
+                            ),
                           const SizedBox(height: 5),
-                          Align(
-                            alignment: Alignment.centerLeft, 
-                            child: Text(
-                              dl.progress == -1.0 ? dl.size : "${(dl.progress * 100).toStringAsFixed(1)} % • ${dl.size}", 
-                              style: const TextStyle(color: AppColors.textMain, fontSize: 12)
-                            )
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(
+                                dl.isFailed ? "فشل التحميل" : (dl.isCompleted ? "تم التحميل بنجاح" : (dl.progress == -1.0 ? "جاري التحميل..." : "${(dl.progress * 100).toStringAsFixed(1)} %")), 
+                                style: TextStyle(color: dl.isFailed ? Colors.red : (dl.isCompleted ? Colors.green : AppColors.textMain), fontSize: 12, fontWeight: FontWeight.bold)
+                              ),
+                              Text(dl.size, style: const TextStyle(color: AppColors.textMain, fontSize: 12)),
+                            ],
                           ),
                         ],
                       ),
