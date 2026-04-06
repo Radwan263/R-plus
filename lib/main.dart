@@ -14,10 +14,10 @@ import 'package:local_auth/local_auth.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:open_file_plus/open_file_plus.dart';
 
-// متغير عام للتحكم في المتصفح من أي مكان (عشان زر الرجوع)
+// متغير عام للتحكم في المتصفح
 InAppWebViewController? globalBrowserController;
 
-// تعريف الوان الهوية للتطبيق
+// ألوان التطبيق
 class AppColors {
   static const Color primary = Color(0xFF2196F3);
   static const Color bgDark = Color(0xFF0A0E14);
@@ -65,9 +65,6 @@ class RMediaHunterApp extends StatelessWidget {
   }
 }
 
-// -----------------------------------------------------------------------------
-// شاشة البداية مع نظام القفل
-// -----------------------------------------------------------------------------
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
   @override
@@ -134,9 +131,6 @@ class _SplashScreenState extends State<SplashScreen> {
   }
 }
 
-// -----------------------------------------------------------------------------
-// الشاشة الرئيسية ونظام التنقل مع PopScope
-// -----------------------------------------------------------------------------
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
   @override
@@ -153,14 +147,12 @@ class _MainScreenState extends State<MainScreen> {
       canPop: false, 
       onPopInvokedWithResult: (didPop, result) async {
         if (didPop) return;
-
         if (_selectedIndex == 1 && globalBrowserController != null) {
           if (await globalBrowserController!.canGoBack()) {
             globalBrowserController!.goBack();
             return;
           }
         }
-
         if (_selectedIndex != 0) {
           setState(() {
             _selectedIndex = 0;
@@ -168,7 +160,6 @@ class _MainScreenState extends State<MainScreen> {
           });
           return;
         }
-
         SystemNavigator.pop();
       },
       child: Scaffold(
@@ -227,46 +218,71 @@ class _MainScreenState extends State<MainScreen> {
 }
 
 // -----------------------------------------------------------------------------
-// مدير التحميل الذكي
+// مدير التحميلات الذكي مع تتبع حالة التحميل المباشرة
 // -----------------------------------------------------------------------------
+class ActiveDownload {
+  final String url;
+  final String fileName;
+  double progress;
+  ActiveDownload({required this.url, required this.fileName, this.progress = 0.0});
+}
+
 class DownloadManager {
   static final DownloadManager _instance = DownloadManager._internal();
   factory DownloadManager() => _instance;
   DownloadManager._internal();
   final Dio _dio = Dio();
 
-  Future<void> startDownload(BuildContext context, String url, String fileName, bool isAudio) async {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text("بدء صيد ${isAudio ? 'الصوت' : 'الفيديو'}... المرجو عدم إغلاق التطبيق"),
-      backgroundColor: isAudio ? AppColors.telegramBlue : AppColors.primary,
-      behavior: SnackBarBehavior.floating,
-    ));
+  // متغير لمتابعة التحميلات النشطة لحظة بلحظة
+  final ValueNotifier<List<ActiveDownload>> activeDownloadsNotifier = ValueNotifier([]);
+  VoidCallback? onDownloadComplete;
 
+  Future<void> startDownload(BuildContext context, String url, String fileName, bool isAudio) async {
     var status = await Permission.storage.request();
     if (!status.isGranted) return;
 
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text("بدأ تحميل: $fileName\nتابع التقدم في قسم التحميلات"),
+      backgroundColor: isAudio ? AppColors.telegramBlue : AppColors.primary,
+      behavior: SnackBarBehavior.floating,
+      duration: const Duration(seconds: 3),
+    ));
+
     String savePath = "/storage/emulated/0/Download/$fileName";
+    
+    // إضافة الملف لقائمة التحميلات النشطة
+    ActiveDownload activeDl = ActiveDownload(url: url, fileName: fileName);
+    activeDownloadsNotifier.value = [...activeDownloadsNotifier.value, activeDl];
     
     try {
       await _dio.download(
         url,
         savePath,
         onReceiveProgress: (received, total) {
-          if (total != -1) {}
+          if (total != -1) {
+            activeDl.progress = received / total;
+            // تحديث واجهة المستخدم
+            activeDownloadsNotifier.value = List.from(activeDownloadsNotifier.value);
+          }
         },
       );
 
+      // إزالة من التحميلات النشطة بعد الانتهاء
+      activeDownloadsNotifier.value = activeDownloadsNotifier.value.where((d) => d.url != url).toList();
+      onDownloadComplete?.call(); // تحديث قائمة الملفات المكتملة
+
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Row(children: [Icon(Icons.check_circle, color: Colors.white), SizedBox(width: 10), Text("اكتمل التحميل! فحص المجلد.")]),
+          content: Row(children: [Icon(Icons.check_circle, color: Colors.white), SizedBox(width: 10), Text("اكتمل التحميل بنجاح!")]),
           backgroundColor: Colors.green,
           behavior: SnackBarBehavior.floating,
         ));
       }
     } catch (e) {
+      activeDownloadsNotifier.value = activeDownloadsNotifier.value.where((d) => d.url != url).toList();
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text("فشل التحميل. تأكد من جودة الإنترنت وحاول مرة أخرى"),
+          content: Text("فشل التحميل. تأكد من جودة الإنترنت"),
           backgroundColor: Colors.red,
           behavior: SnackBarBehavior.floating,
         ));
@@ -275,9 +291,6 @@ class DownloadManager {
   }
 }
 
-// -----------------------------------------------------------------------------
-// الصفحة الرئيسية وصائد الروابط
-// -----------------------------------------------------------------------------
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
   @override
@@ -308,7 +321,7 @@ class _HomePageState extends State<HomePage> {
           _showDownloadOptionsSheet(context, video.title, videoStream.url.toString(), audioStream.url.toString());
         }
       } else {
-        DownloadManager().startDownload(context, url, "hunter_download_${DateTime.now().millisecond}.mp4", false);
+        DownloadManager().startDownload(context, url, "Video_Playback_${DateTime.now().millisecond}.mp4", false);
       }
     } catch (e) {
       if (mounted) {
@@ -339,12 +352,14 @@ class _HomePageState extends State<HomePage> {
             const SizedBox(height: 30),
             _buildGlassOptionCard(context, Icons.video_library_rounded, "تحميل فيديو", "MP4 جودة عالية", AppColors.primary, () {
               Navigator.pop(context);
-              DownloadManager().startDownload(context, videoUrl, "${title.replaceAll(' ', '_')}.mp4", false);
+              String safeName = title.replaceAll(RegExp(r'[\\/:*?"<>|]'), ' ');
+              DownloadManager().startDownload(context, videoUrl, "$safeName.mp4", false);
             }),
             const SizedBox(height: 15),
             _buildGlassOptionCard(context, Icons.music_note_rounded, "تحميل صوت (MP3)", "صوت عالي الجودة M4A", AppColors.telegramBlue, () {
               Navigator.pop(context);
-              DownloadManager().startDownload(context, audioUrl, "${title.replaceAll(' ', '_')}.mp3", true);
+              String safeName = title.replaceAll(RegExp(r'[\\/:*?"<>|]'), ' ');
+              DownloadManager().startDownload(context, audioUrl, "$safeName.mp3", true);
             }),
             const SizedBox(height: 10),
           ],
@@ -359,11 +374,7 @@ class _HomePageState extends State<HomePage> {
       borderRadius: BorderRadius.circular(15),
       child: Container(
         padding: const EdgeInsets.all(15),
-        decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.03),
-          borderRadius: BorderRadius.circular(15),
-          border: Border.all(color: AppColors.border, width: 0.5),
-        ),
+        decoration: BoxDecoration(color: Colors.white.withOpacity(0.03), borderRadius: BorderRadius.circular(15), border: Border.all(color: AppColors.border, width: 0.5)),
         child: Row(
           children: [
             Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: color.withOpacity(0.1), borderRadius: BorderRadius.circular(10)), child: Icon(icon, color: color, size: 28)),
@@ -389,12 +400,7 @@ class _HomePageState extends State<HomePage> {
               const Icon(Icons.auto_fix_high_rounded, size: 80, color: AppColors.primary),
               const SizedBox(height: 40),
               Container(
-                decoration: BoxDecoration(
-                  color: AppColors.cardBg,
-                  borderRadius: BorderRadius.circular(15),
-                  border: Border.all(color: AppColors.border),
-                  boxShadow: [BoxShadow(color: AppColors.primary.withOpacity(0.05), blurRadius: 10)],
-                ),
+                decoration: BoxDecoration(color: AppColors.cardBg, borderRadius: BorderRadius.circular(15), border: Border.all(color: AppColors.border), boxShadow: [BoxShadow(color: AppColors.primary.withOpacity(0.05), blurRadius: 10)]),
                 child: TextField(
                   controller: _urlController,
                   decoration: InputDecoration(
@@ -419,7 +425,7 @@ class _HomePageState extends State<HomePage> {
 }
 
 // -----------------------------------------------------------------------------
-// شاشة المتصفح الذكي - نظام IDM+ (Sniffer & Address Bar)
+// شاشة المتصفح الذكي - Sniffer & Smart Naming
 // -----------------------------------------------------------------------------
 class BrowserPage extends StatefulWidget {
   const BrowserPage({super.key});
@@ -434,7 +440,23 @@ class _BrowserPageState extends State<BrowserPage> {
   bool _desktopMode = false;   
   
   final TextEditingController _urlController = TextEditingController(text: "https://www.google.com");
-  Set<String> _sniffedLinks = {}; 
+  
+  // خريطة لتخزين الروابط المصطادة مع أسمائها الذكية
+  Map<String, String> _sniffedLinks = {}; 
+
+  // دالة لجلب اسم الصفحة (العمل/الفيلم) بذكاء
+  Future<void> _addSniffedLink(String url) async {
+    if (!_sniffedLinks.containsKey(url)) {
+      String pageTitle = await webViewController?.getTitle() ?? "";
+      if (pageTitle.isEmpty || pageTitle == "null") pageTitle = "Video_Playback";
+      // تنظيف الاسم من الرموز المزعجة عشان ينفع يكون اسم ملف
+      pageTitle = pageTitle.replaceAll(RegExp(r'[\\/:*?"<>|]'), ' ').trim();
+      
+      setState(() {
+        _sniffedLinks[url] = pageTitle;
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -459,11 +481,7 @@ class _BrowserPageState extends State<BrowserPage> {
                   Expanded(
                     child: Container(
                       height: 40,
-                      decoration: BoxDecoration(
-                        color: AppColors.bgDark,
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: AppColors.border),
-                      ),
+                      decoration: BoxDecoration(color: AppColors.bgDark, borderRadius: BorderRadius.circular(20), border: Border.all(color: AppColors.border)),
                       child: TextField(
                         controller: _urlController,
                         style: const TextStyle(fontSize: 14),
@@ -473,11 +491,7 @@ class _BrowserPageState extends State<BrowserPage> {
                           var url = value.startsWith("http") ? value : "https://www.google.com/search?q=$value";
                           webViewController?.loadUrl(urlRequest: URLRequest(url: WebUri(url)));
                         },
-                        decoration: const InputDecoration(
-                          hintText: "ابحث أو أدخل رابطاً...",
-                          border: InputBorder.none,
-                          contentPadding: EdgeInsets.symmetric(horizontal: 15, vertical: 10),
-                        ),
+                        decoration: const InputDecoration(hintText: "ابحث أو أدخل رابطاً...", border: InputBorder.none, contentPadding: EdgeInsets.symmetric(horizontal: 15, vertical: 10)),
                       ),
                     ),
                   ),
@@ -496,10 +510,7 @@ class _BrowserPageState extends State<BrowserPage> {
                           child: Container(
                             padding: const EdgeInsets.all(4),
                             decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
-                            child: Text(
-                              '${_sniffedLinks.length}',
-                              style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
-                            ),
+                            child: Text('${_sniffedLinks.length}', style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
                           ),
                         )
                     ],
@@ -536,9 +547,7 @@ class _BrowserPageState extends State<BrowserPage> {
                 });
               },
               onUpdateVisitedHistory: (controller, url, androidIsReload) {
-                setState(() {
-                  _urlController.text = url.toString();
-                });
+                setState(() => _urlController.text = url.toString());
               },
               onLoadStop: (controller, url) async {
                 if (_adBlockEnabled) {
@@ -552,7 +561,6 @@ class _BrowserPageState extends State<BrowserPage> {
               },
               onProgressChanged: (controller, progress) async {
                 setState(() => _progress = progress / 100);
-                
                 if (progress == 100) {
                   var result = await controller.evaluateJavascript(source: """
                     (function() {
@@ -566,30 +574,22 @@ class _BrowserPageState extends State<BrowserPage> {
                   """);
                   if (result != null && result.toString().isNotEmpty) {
                     List<String> urls = result.toString().split(',');
-                    setState(() {
-                      for(var u in urls) {
-                        if(_isMediaUrl(u)) _sniffedLinks.add(u);
-                      }
-                    });
+                    for(var u in urls) {
+                      if(_isMediaUrl(u)) _addSniffedLink(u);
+                    }
                   }
                 }
               },
               shouldInterceptRequest: (controller, request) async {
                 final url = request.url.toString().toLowerCase();
-                
                 if (_adBlockEnabled) {
                   final adHosts = ["ads", "adsystem", "popunder", "propellerads", "exoclick", "doubleclick", "analytics", "tracker", "syndication", "adserver"];
                   if (adHosts.any((host) => url.contains(host))) {
                     return WebResourceResponse(contentType: "text/plain", data: Uint8List(0));
                   }
                 }
-
                 if (_isMediaUrl(url)) {
-                  Future.microtask(() {
-                    if (!_sniffedLinks.contains(request.url.toString())) {
-                      setState(() => _sniffedLinks.add(request.url.toString()));
-                    }
-                  });
+                  Future.microtask(() => _addSniffedLink(request.url.toString()));
                 }
                 return null;
               },
@@ -642,21 +642,26 @@ class _BrowserPageState extends State<BrowserPage> {
                 itemCount: _sniffedLinks.length,
                 separatorBuilder: (_, __) => const SizedBox(height: 10),
                 itemBuilder: (context, index) {
-                  String link = _sniffedLinks.elementAt(index);
+                  String link = _sniffedLinks.keys.elementAt(index);
+                  String rawTitle = _sniffedLinks[link] ?? "Video_Playback";
                   bool isAudio = link.toLowerCase().contains(".mp3") || link.toLowerCase().contains(".m4a");
                   
                   return Container(
                     decoration: BoxDecoration(color: AppColors.cardBg, borderRadius: BorderRadius.circular(15), border: Border.all(color: AppColors.border)),
                     child: ListTile(
                       leading: Icon(isAudio ? Icons.music_note : Icons.movie, color: isAudio ? AppColors.telegramBlue : AppColors.primary),
-                      title: Text("ملف ميديا ${index + 1}", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                      subtitle: Text(link, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: AppColors.textMain, fontSize: 10)),
+                      title: Text(rawTitle, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                      subtitle: Text(isAudio ? "ملف صوتي" : "ملف فيديو", style: const TextStyle(color: AppColors.textMain, fontSize: 12)),
                       trailing: ElevatedButton(
                         style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
                         onPressed: () {
                           Navigator.pop(context);
                           String ext = isAudio ? ".mp3" : ".mp4";
-                          DownloadManager().startDownload(context, link, "Hunter_Sniff_${DateTime.now().millisecondsSinceEpoch}$ext", isAudio);
+                          // لو الاسم طويل جداً نقصه عشان مسار الجهاز
+                          if (rawTitle.length > 40) rawTitle = rawTitle.substring(0, 40);
+                          String fileName = "$rawTitle - ${DateTime.now().millisecondsSinceEpoch}$ext";
+                          
+                          DownloadManager().startDownload(context, link, fileName, isAudio);
                         },
                         child: const Text("تحميل", style: TextStyle(color: Colors.white)),
                       ),
@@ -719,7 +724,7 @@ class _BrowserPageState extends State<BrowserPage> {
 }
 
 // -----------------------------------------------------------------------------
-// شاشة التحميلات
+// شاشة التحميلات مع عرض مباشر (Live Progress)
 // -----------------------------------------------------------------------------
 class DownloadsPage extends StatefulWidget {
   const DownloadsPage({super.key});
@@ -735,6 +740,8 @@ class _DownloadsPageState extends State<DownloadsPage> {
   void initState() {
     super.initState();
     _loadFiles();
+    // تفعيل التحديث التلقائي لما أي تحميل يخلص
+    DownloadManager().onDownloadComplete = _loadFiles;
   }
   
   Future<void> _loadFiles() async {
@@ -758,12 +765,61 @@ class _DownloadsPageState extends State<DownloadsPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text("التحميلات الخاصة بي", style: TextStyle(fontWeight: FontWeight.bold)), backgroundColor: Colors.transparent, centerTitle: true),
-      body: _isLoading ? const Center(child: CircularProgressIndicator(color: AppColors.primary)) : _files.isEmpty ? _buildEmptyState() : _buildFilesList(),
+      body: Column(
+        children: [
+          // 1. قسم التحميلات النشطة (Live Tracker)
+          ValueListenableBuilder<List<ActiveDownload>>(
+            valueListenable: DownloadManager().activeDownloadsNotifier,
+            builder: (context, activeList, child) {
+              if (activeList.isEmpty) return const SizedBox.shrink();
+              return Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 5),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text("جاري التحميل...", style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 10),
+                    ...activeList.map((dl) => Card(
+                      color: AppColors.cardBg,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15), side: const BorderSide(color: AppColors.primary, width: 1)),
+                      child: Padding(
+                        padding: const EdgeInsets.all(15),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(dl.fileName, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold), maxLines: 1, overflow: TextOverflow.ellipsis),
+                            const SizedBox(height: 10),
+                            LinearProgressIndicator(
+                              value: dl.progress,
+                              backgroundColor: AppColors.border,
+                              color: AppColors.primary,
+                              borderRadius: BorderRadius.circular(5),
+                              minHeight: 8,
+                            ),
+                            const SizedBox(height: 5),
+                            Align(alignment: Alignment.centerLeft, child: Text("${(dl.progress * 100).toStringAsFixed(1)} %", style: const TextStyle(color: AppColors.textMain, fontSize: 12))),
+                          ],
+                        ),
+                      ),
+                    )),
+                    const Divider(color: AppColors.border, height: 30),
+                  ],
+                ),
+              );
+            },
+          ),
+
+          // 2. قسم التحميلات المكتملة
+          Expanded(
+            child: _isLoading ? const Center(child: CircularProgressIndicator(color: AppColors.primary)) : _files.isEmpty ? _buildEmptyState() : _buildFilesList(),
+          ),
+        ],
+      ),
     );
   }
 
   Widget _buildEmptyState() {
-    return const Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(Icons.video_collection_rounded, size: 100, color: AppColors.border), SizedBox(height: 20), Text("لا توجد تحميلات حتى الآن", style: TextStyle(fontSize: 18, color: AppColors.textMain))]));
+    return const Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(Icons.video_collection_rounded, size: 100, color: AppColors.border), SizedBox(height: 20), Text("لا توجد ملفات مكتملة", style: TextStyle(fontSize: 18, color: AppColors.textMain))]));
   }
 
   Widget _buildFilesList() {
@@ -796,9 +852,6 @@ class _DownloadsPageState extends State<DownloadsPage> {
   }
 }
 
-// -----------------------------------------------------------------------------
-// شاشة الإعدادات
-// -----------------------------------------------------------------------------
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
   @override
