@@ -245,27 +245,45 @@ class DownloadManager {
   Future<void> startDownload(BuildContext context, String url, String fileName, bool isAudio) async {
     try {
       if (Platform.isAndroid) {
-        await Permission.manageExternalStorage.request();
+        // طلب الصلاحيات الأساسية
         await Permission.storage.request();
+        // طلب الوصول لجميع الملفات للأندرويد 11+ (اختياري ولكن مفيد لمجلد التحميلات العام)
+        if (await Permission.manageExternalStorage.isDenied) {
+          await Permission.manageExternalStorage.request();
+        }
       }
 
-      final String baseDir = "/storage/emulated/0/Download/R_Hunter";
+      // الحصول على مسار مجلد التحميلات بشكل آمن
+      Directory? downloadsDir;
+      if (Platform.isAndroid) {
+        downloadsDir = Directory('/storage/emulated/0/Download');
+      } else {
+        downloadsDir = await getDownloadsDirectory();
+      }
+
+      if (downloadsDir == null || !await downloadsDir.exists()) {
+        downloadsDir = await getApplicationDocumentsDirectory();
+      }
+
+      final String baseDir = "${downloadsDir.path}/R_Hunter";
       final Directory rHunterDir = Directory(baseDir);
       
       if (!await rHunterDir.exists()) {
         await rHunterDir.create(recursive: true);
-        ErrorHunter.log("Folder_Status", "تم إنشاء مجلد R_Hunter بنجاح");
+        ErrorHunter.log("Folder_Status", "تم إنشاء مجلد R_Hunter بنجاح في: ${rHunterDir.path}");
       }
 
       // تنظيف اسم الملف من أي رموز غريبة
       String cleanFileName = fileName.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
       String savePath = "${rHunterDir.path}/$cleanFileName";
 
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text("جاري الصيد في: Download/R_Hunter"),
-        backgroundColor: AppColors.primary,
-        behavior: SnackBarBehavior.floating,
-      ));
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text("جاري الصيد في: ${rHunterDir.path.split('/').last}"),
+          backgroundColor: AppColors.primary,
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
 
       ActiveDownload activeDl = ActiveDownload(url: url, fileName: cleanFileName);
       activeDownloadsNotifier.value = [...activeDownloadsNotifier.value, activeDl];
@@ -275,7 +293,6 @@ class DownloadManager {
           activeDl.progress = received / total;
           activeDl.size = "${(received / 1024 / 1024).toStringAsFixed(1)} MB / ${(total / 1024 / 1024).toStringAsFixed(1)} MB";
         } else {
-          // التعامل مع السيرفرات المجهولة
           activeDl.progress = -1.0;
           activeDl.size = "${(received / 1024 / 1024).toStringAsFixed(1)} MB (جاري التحميل...)";
         }
@@ -650,11 +667,19 @@ class DownloadsPageState extends State<DownloadsPage> {
   Future<void> loadFiles() async {
     try {
       setState(() => _isLoading = true);
-      if (Platform.isAndroid) {
-        await Permission.manageExternalStorage.request();
-      }
       
-      final dir = Directory("/storage/emulated/0/Download/R_Hunter");
+      Directory? downloadsDir;
+      if (Platform.isAndroid) {
+        downloadsDir = Directory('/storage/emulated/0/Download');
+      } else {
+        downloadsDir = await getDownloadsDirectory();
+      }
+
+      if (downloadsDir == null || !await downloadsDir.exists()) {
+        downloadsDir = await getApplicationDocumentsDirectory();
+      }
+
+      final dir = Directory("${downloadsDir.path}/R_Hunter");
       if (!await dir.exists()) {
         setState(() { _files = []; _isLoading = false; });
         return;
