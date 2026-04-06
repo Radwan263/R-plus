@@ -16,7 +16,7 @@ import 'package:open_file_plus/open_file_plus.dart';
 
 // متغيرات عامة للتحكم السريع
 InAppWebViewController? globalBrowserController;
-final GlobalKey<DownloadsPageState> globalDownloadsKey = GlobalKey(); // مفتاح سحري لتحديث شاشة التحميلات
+final GlobalKey<DownloadsPageState> globalDownloadsKey = GlobalKey(); 
 
 class AppColors {
   static const Color primary = Color(0xFF2196F3);
@@ -168,7 +168,7 @@ class _MainScreenState extends State<MainScreen> {
             children: [
               const HomePage(),
               const BrowserPage(),
-              DownloadsPage(key: globalDownloadsKey), // تمرير المفتاح هنا للتحكم فيها
+              DownloadsPage(key: globalDownloadsKey),
               const SettingsPage(),
             ],
           ),
@@ -186,7 +186,6 @@ class _MainScreenState extends State<MainScreen> {
         onTap: (index) {
           setState(() => _selectedIndex = index);
           _pageController.jumpToPage(index); 
-          // 💡 تحديث التحميلات فوراً عند الضغط على الأيقونة بتاعتها
           if (index == 2) {
             globalDownloadsKey.currentState?.loadFiles();
           }
@@ -209,7 +208,7 @@ class _MainScreenState extends State<MainScreen> {
 }
 
 // -----------------------------------------------------------------------------
-// مدير التحميلات الذكي مع الصلاحيات القوية
+// مدير التحميلات الذكي
 // -----------------------------------------------------------------------------
 class ActiveDownload {
   final String url;
@@ -228,7 +227,6 @@ class DownloadManager {
   VoidCallback? onDownloadComplete;
 
   Future<void> startDownload(BuildContext context, String url, String fileName, bool isAudio) async {
-    // 💡 الضربة القاضية لمشكلة الصلاحيات في أندرويد 13+
     if (Platform.isAndroid) {
       await Permission.storage.request();
       await Permission.manageExternalStorage.request();
@@ -261,7 +259,7 @@ class DownloadManager {
 
       activeDownloadsNotifier.value = activeDownloadsNotifier.value.where((d) => d.url != url).toList();
       onDownloadComplete?.call(); 
-      globalDownloadsKey.currentState?.loadFiles(); // تحديث فوري للشاشة
+      globalDownloadsKey.currentState?.loadFiles(); 
 
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
@@ -413,7 +411,7 @@ class _HomePageState extends State<HomePage> {
 }
 
 // -----------------------------------------------------------------------------
-// المتصفح الذكي - جلب الاسم والحجم
+// المتصفح الذكي 
 // -----------------------------------------------------------------------------
 class BrowserPage extends StatefulWidget {
   const BrowserPage({super.key});
@@ -428,12 +426,10 @@ class _BrowserPageState extends State<BrowserPage> {
   bool _desktopMode = false;   
   final TextEditingController _urlController = TextEditingController(text: "https://www.google.com");
   
-  // 💡 تحديث الخريطة لحفظ "الاسم" و "الحجم" معاً
   Map<String, Map<String, String>> _sniffedLinks = {}; 
 
   Future<void> _addSniffedLink(String url) async {
     if (!_sniffedLinks.containsKey(url)) {
-      // 1. جلب اسم الفيلم/الحلقة من عنوان الصفحة
       String pageTitle = await webViewController?.getTitle() ?? "";
       if (pageTitle.isEmpty || pageTitle == "null") pageTitle = "Video_Playback";
       pageTitle = pageTitle.replaceAll(RegExp(r'[\\/:*?"<>|]'), ' ').trim();
@@ -444,7 +440,6 @@ class _BrowserPageState extends State<BrowserPage> {
         });
       }
 
-      // 2. 💡 الروبوت الخفي: جلب حجم الملف بدون ما نحمله
       try {
         var response = await Dio().head(url);
         var length = response.headers.value(HttpHeaders.contentLengthHeader) ?? response.headers.value('content-length');
@@ -606,7 +601,6 @@ class _BrowserPageState extends State<BrowserPage> {
                     child: ListTile(
                       leading: Icon(isAudio ? Icons.music_note : Icons.movie, color: isAudio ? AppColors.telegramBlue : AppColors.primary),
                       title: Text(rawTitle, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                      // 💡 عرض الحجم تحت الاسم
                       subtitle: Text("${isAudio ? 'ملف صوتي' : 'ملف فيديو'} • $sizeStr", style: const TextStyle(color: AppColors.textMain, fontSize: 12)),
                       trailing: ElevatedButton(
                         style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
@@ -672,7 +666,7 @@ class _BrowserPageState extends State<BrowserPage> {
 }
 
 // -----------------------------------------------------------------------------
-// شاشة التحميلات - تم تحويل State لـ Public
+// شاشة التحميلات بتعديل toLowerCase والامتدادات الشاملة
 // -----------------------------------------------------------------------------
 class DownloadsPage extends StatefulWidget {
   const DownloadsPage({super.key});
@@ -691,7 +685,6 @@ class DownloadsPageState extends State<DownloadsPage> {
     DownloadManager().onDownloadComplete = loadFiles;
   }
   
-  // دالة جلب الملفات بقت Public عشان نقدر نستدعيها من أي مكان
   Future<void> loadFiles() async {
     setState(() => _isLoading = true);
     final dir = Directory("/storage/emulated/0/Download");
@@ -702,7 +695,17 @@ class DownloadsPageState extends State<DownloadsPage> {
     
     final List<FileSystemEntity> allFiles = dir.listSync();
     setState(() {
-      _files = allFiles.where((f) => f.path.endsWith(".mp4") || f.path.endsWith(".mp3") || f.path.endsWith(". Hunter_")).toList();
+      _files = allFiles.where((f) {
+        String path = f.path.toLowerCase();
+        return path.endsWith(".mp4") || 
+               path.endsWith(".mp3") || 
+               path.endsWith(".webm") || 
+               path.endsWith(".mkv") || 
+               path.endsWith(".m4a") || 
+               path.endsWith(".avi") || 
+               path.endsWith(".mov") || 
+               path.endsWith(".ts");
+      }).toList();
       _isLoading = false;
     });
   }
@@ -767,14 +770,15 @@ class DownloadsPageState extends State<DownloadsPage> {
       separatorBuilder: (context, index) => const SizedBox(height: 10),
       itemBuilder: (context, index) {
         final file = _files[index];
-        final isVideo = file.path.endsWith(".mp4");
+        final path = file.path.toLowerCase();
+        final isAudio = path.endsWith(".mp3") || path.endsWith(".m4a");
         return Card(
           color: AppColors.cardBg,
           elevation: 0,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15), side: const BorderSide(color: AppColors.border, width: 0.5)),
           child: ListTile(
             contentPadding: const EdgeInsets.all(15),
-            leading: Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: (isVideo ? AppColors.primary : AppColors.telegramBlue).withOpacity(0.1), borderRadius: BorderRadius.circular(10)), child: Icon(isVideo ? Icons.movie_rounded : Icons.music_note_rounded, color: isVideo ? AppColors.primary : AppColors.telegramBlue, size: 28)),
+            leading: Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: (isAudio ? AppColors.telegramBlue : AppColors.primary).withOpacity(0.1), borderRadius: BorderRadius.circular(10)), child: Icon(isAudio ? Icons.music_note_rounded : Icons.movie_rounded, color: isAudio ? AppColors.telegramBlue : AppColors.primary, size: 28)),
             title: Text(file.path.split('/').last, style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white), maxLines: 2, overflow: TextOverflow.ellipsis),
             onTap: () async { await OpenFile.open(file.path); },
             trailing: IconButton(icon: const Icon(Icons.delete_forever, color: Colors.red), onPressed: () async { await file.delete(); loadFiles(); }),
@@ -847,3 +851,4 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 }
+
