@@ -14,10 +14,10 @@ import 'package:local_auth/local_auth.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:open_file_plus/open_file_plus.dart';
 
-// متغير عام للتحكم في المتصفح
+// متغيرات عامة للتحكم السريع
 InAppWebViewController? globalBrowserController;
+final GlobalKey<DownloadsPageState> globalDownloadsKey = GlobalKey(); // مفتاح سحري لتحديث شاشة التحميلات
 
-// ألوان التطبيق
 class AppColors {
   static const Color primary = Color(0xFF2196F3);
   static const Color bgDark = Color(0xFF0A0E14);
@@ -108,11 +108,7 @@ class _SplashScreenState extends State<SplashScreen> {
     return Scaffold(
       body: Container(
         decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [AppColors.bgDark, AppColors.cardBg],
-          ),
+          gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [AppColors.bgDark, AppColors.cardBg]),
         ),
         child: Center(
           child: Column(
@@ -164,22 +160,16 @@ class _MainScreenState extends State<MainScreen> {
       },
       child: Scaffold(
         body: Container(
-          decoration: const BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [AppColors.bgDark, AppColors.cardBg],
-            ),
-          ),
+          decoration: const BoxDecoration(gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [AppColors.bgDark, AppColors.cardBg])),
           child: PageView(
             controller: _pageController,
             physics: const NeverScrollableScrollPhysics(), 
             onPageChanged: (index) => setState(() => _selectedIndex = index),
-            children: const [
-              HomePage(),
-              BrowserPage(),
-              DownloadsPage(),
-              SettingsPage(),
+            children: [
+              const HomePage(),
+              const BrowserPage(),
+              DownloadsPage(key: globalDownloadsKey), // تمرير المفتاح هنا للتحكم فيها
+              const SettingsPage(),
             ],
           ),
         ),
@@ -190,15 +180,16 @@ class _MainScreenState extends State<MainScreen> {
 
   Widget _buildGlassBottomNav() {
     return Container(
-      decoration: const BoxDecoration(
-        color: AppColors.cardBg,
-        border: Border(top: BorderSide(color: AppColors.border, width: 0.5)),
-      ),
+      decoration: const BoxDecoration(color: AppColors.cardBg, border: Border(top: BorderSide(color: AppColors.border, width: 0.5))),
       child: BottomNavigationBar(
         currentIndex: _selectedIndex,
         onTap: (index) {
           setState(() => _selectedIndex = index);
           _pageController.jumpToPage(index); 
+          // 💡 تحديث التحميلات فوراً عند الضغط على الأيقونة بتاعتها
+          if (index == 2) {
+            globalDownloadsKey.currentState?.loadFiles();
+          }
         },
         backgroundColor: Colors.transparent,
         elevation: 0,
@@ -218,7 +209,7 @@ class _MainScreenState extends State<MainScreen> {
 }
 
 // -----------------------------------------------------------------------------
-// مدير التحميلات الذكي مع تتبع حالة التحميل المباشرة
+// مدير التحميلات الذكي مع الصلاحيات القوية
 // -----------------------------------------------------------------------------
 class ActiveDownload {
   final String url;
@@ -233,24 +224,26 @@ class DownloadManager {
   DownloadManager._internal();
   final Dio _dio = Dio();
 
-  // متغير لمتابعة التحميلات النشطة لحظة بلحظة
   final ValueNotifier<List<ActiveDownload>> activeDownloadsNotifier = ValueNotifier([]);
   VoidCallback? onDownloadComplete;
 
   Future<void> startDownload(BuildContext context, String url, String fileName, bool isAudio) async {
-    var status = await Permission.storage.request();
-    if (!status.isGranted) return;
+    // 💡 الضربة القاضية لمشكلة الصلاحيات في أندرويد 13+
+    if (Platform.isAndroid) {
+      await Permission.storage.request();
+      await Permission.manageExternalStorage.request();
+      await Permission.videos.request();
+      await Permission.audio.request();
+    }
 
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text("بدأ تحميل: $fileName\nتابع التقدم في قسم التحميلات"),
+      content: Text("بدأ تحميل: $fileName\nراجع قسم التحميلات"),
       backgroundColor: isAudio ? AppColors.telegramBlue : AppColors.primary,
       behavior: SnackBarBehavior.floating,
       duration: const Duration(seconds: 3),
     ));
 
     String savePath = "/storage/emulated/0/Download/$fileName";
-    
-    // إضافة الملف لقائمة التحميلات النشطة
     ActiveDownload activeDl = ActiveDownload(url: url, fileName: fileName);
     activeDownloadsNotifier.value = [...activeDownloadsNotifier.value, activeDl];
     
@@ -261,15 +254,14 @@ class DownloadManager {
         onReceiveProgress: (received, total) {
           if (total != -1) {
             activeDl.progress = received / total;
-            // تحديث واجهة المستخدم
             activeDownloadsNotifier.value = List.from(activeDownloadsNotifier.value);
           }
         },
       );
 
-      // إزالة من التحميلات النشطة بعد الانتهاء
       activeDownloadsNotifier.value = activeDownloadsNotifier.value.where((d) => d.url != url).toList();
-      onDownloadComplete?.call(); // تحديث قائمة الملفات المكتملة
+      onDownloadComplete?.call(); 
+      globalDownloadsKey.currentState?.loadFiles(); // تحديث فوري للشاشة
 
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
@@ -282,7 +274,7 @@ class DownloadManager {
       activeDownloadsNotifier.value = activeDownloadsNotifier.value.where((d) => d.url != url).toList();
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text("فشل التحميل. تأكد من جودة الإنترنت"),
+          content: Text("فشل التحميل. تأكد من جودة الإنترنت أو مساحة الجهاز"),
           backgroundColor: Colors.red,
           behavior: SnackBarBehavior.floating,
         ));
@@ -338,11 +330,7 @@ class _HomePageState extends State<HomePage> {
       backgroundColor: Colors.transparent,
       builder: (context) => Container(
         padding: const EdgeInsets.all(24),
-        decoration: const BoxDecoration(
-          color: AppColors.cardBg,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
-          border: Border(top: BorderSide(color: AppColors.border)),
-        ),
+        decoration: const BoxDecoration(color: AppColors.cardBg, borderRadius: BorderRadius.vertical(top: Radius.circular(30)), border: Border(top: BorderSide(color: AppColors.border))),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -425,7 +413,7 @@ class _HomePageState extends State<HomePage> {
 }
 
 // -----------------------------------------------------------------------------
-// شاشة المتصفح الذكي - Sniffer & Smart Naming
+// المتصفح الذكي - جلب الاسم والحجم
 // -----------------------------------------------------------------------------
 class BrowserPage extends StatefulWidget {
   const BrowserPage({super.key});
@@ -438,23 +426,41 @@ class _BrowserPageState extends State<BrowserPage> {
   double _progress = 0;
   bool _adBlockEnabled = true; 
   bool _desktopMode = false;   
-  
   final TextEditingController _urlController = TextEditingController(text: "https://www.google.com");
   
-  // خريطة لتخزين الروابط المصطادة مع أسمائها الذكية
-  Map<String, String> _sniffedLinks = {}; 
+  // 💡 تحديث الخريطة لحفظ "الاسم" و "الحجم" معاً
+  Map<String, Map<String, String>> _sniffedLinks = {}; 
 
-  // دالة لجلب اسم الصفحة (العمل/الفيلم) بذكاء
   Future<void> _addSniffedLink(String url) async {
     if (!_sniffedLinks.containsKey(url)) {
+      // 1. جلب اسم الفيلم/الحلقة من عنوان الصفحة
       String pageTitle = await webViewController?.getTitle() ?? "";
       if (pageTitle.isEmpty || pageTitle == "null") pageTitle = "Video_Playback";
-      // تنظيف الاسم من الرموز المزعجة عشان ينفع يكون اسم ملف
       pageTitle = pageTitle.replaceAll(RegExp(r'[\\/:*?"<>|]'), ' ').trim();
       
-      setState(() {
-        _sniffedLinks[url] = pageTitle;
-      });
+      if (mounted) {
+        setState(() {
+          _sniffedLinks[url] = {"title": pageTitle, "size": "يتم حساب الحجم..."};
+        });
+      }
+
+      // 2. 💡 الروبوت الخفي: جلب حجم الملف بدون ما نحمله
+      try {
+        var response = await Dio().head(url);
+        var length = response.headers.value(HttpHeaders.contentLengthHeader) ?? response.headers.value('content-length');
+        if (length != null) {
+          double sizeInMb = int.parse(length) / (1024 * 1024);
+          if (mounted) {
+            setState(() {
+              _sniffedLinks[url] = {"title": pageTitle, "size": "${sizeInMb.toStringAsFixed(1)} MB"};
+            });
+          }
+        } else {
+          if (mounted) setState(() => _sniffedLinks[url] = {"title": pageTitle, "size": "حجم غير معروف"});
+        }
+      } catch (e) {
+        if (mounted) setState(() => _sniffedLinks[url] = {"title": pageTitle, "size": "حجم غير معروف"});
+      }
     }
   }
 
@@ -471,13 +477,7 @@ class _BrowserPageState extends State<BrowserPage> {
               padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 8.0),
               child: Row(
                 children: [
-                  IconButton(
-                    icon: const Icon(Icons.home_rounded, color: AppColors.primary),
-                    onPressed: () {
-                      webViewController?.loadUrl(urlRequest: URLRequest(url: WebUri("https://www.google.com")));
-                    },
-                  ),
-                  
+                  IconButton(icon: const Icon(Icons.home_rounded, color: AppColors.primary), onPressed: () => webViewController?.loadUrl(urlRequest: URLRequest(url: WebUri("https://www.google.com")))),
                   Expanded(
                     child: Container(
                       height: 40,
@@ -495,27 +495,14 @@ class _BrowserPageState extends State<BrowserPage> {
                       ),
                     ),
                   ),
-
                   Stack(
                     alignment: Alignment.topRight,
                     children: [
-                      IconButton(
-                        icon: const Icon(Icons.download_for_offline_rounded, size: 28, color: AppColors.textMain),
-                        onPressed: _showSniffedLinksSheet,
-                      ),
+                      IconButton(icon: const Icon(Icons.download_for_offline_rounded, size: 28, color: AppColors.textMain), onPressed: _showSniffedLinksSheet),
                       if (_sniffedLinks.isNotEmpty)
-                        Positioned(
-                          right: 8,
-                          top: 8,
-                          child: Container(
-                            padding: const EdgeInsets.all(4),
-                            decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
-                            child: Text('${_sniffedLinks.length}', style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
-                          ),
-                        )
+                        Positioned(right: 8, top: 8, child: Container(padding: const EdgeInsets.all(4), decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle), child: Text('${_sniffedLinks.length}', style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold))))
                     ],
                   ),
-
                   _buildBrowserPopupMenu(),
                 ],
               ),
@@ -541,42 +528,23 @@ class _BrowserPageState extends State<BrowserPage> {
                 webViewController = controller;
               },
               onLoadStart: (controller, url) {
-                setState(() {
-                  _urlController.text = url.toString();
-                  _sniffedLinks.clear(); 
-                });
+                setState(() { _urlController.text = url.toString(); _sniffedLinks.clear(); });
               },
               onUpdateVisitedHistory: (controller, url, androidIsReload) {
                 setState(() => _urlController.text = url.toString());
               },
               onLoadStop: (controller, url) async {
                 if (_adBlockEnabled) {
-                  await controller.evaluateJavascript(source: """
-                    var style = document.createElement('style');
-                    style.type = 'text/css';
-                    style.innerHTML = '.ad, .ads, .banner, .pop-up, iframe[src*="ads"], [class*="ad-"], [id*="ad-"] { display: none !important; }';
-                    document.head.appendChild(style);
-                  """);
+                  await controller.evaluateJavascript(source: "var style = document.createElement('style'); style.type = 'text/css'; style.innerHTML = '.ad, .ads, .banner, .pop-up, iframe[src*=\"ads\"], [class*=\"ad-\"], [id*=\"ad-\"] { display: none !important; }'; document.head.appendChild(style);");
                 }
               },
               onProgressChanged: (controller, progress) async {
                 setState(() => _progress = progress / 100);
                 if (progress == 100) {
-                  var result = await controller.evaluateJavascript(source: """
-                    (function() {
-                      var media = document.querySelectorAll('video, audio, source');
-                      var urls = [];
-                      for(var i=0; i<media.length; i++) {
-                        if(media[i].src && media[i].src.startsWith('http')) urls.push(media[i].src);
-                      }
-                      return urls.join(',');
-                    })();
-                  """);
+                  var result = await controller.evaluateJavascript(source: "(function() { var media = document.querySelectorAll('video, audio, source'); var urls = []; for(var i=0; i<media.length; i++) { if(media[i].src && media[i].src.startsWith('http')) urls.push(media[i].src); } return urls.join(','); })();");
                   if (result != null && result.toString().isNotEmpty) {
                     List<String> urls = result.toString().split(',');
-                    for(var u in urls) {
-                      if(_isMediaUrl(u)) _addSniffedLink(u);
-                    }
+                    for(var u in urls) { if(_isMediaUrl(u)) _addSniffedLink(u); }
                   }
                 }
               },
@@ -584,9 +552,7 @@ class _BrowserPageState extends State<BrowserPage> {
                 final url = request.url.toString().toLowerCase();
                 if (_adBlockEnabled) {
                   final adHosts = ["ads", "adsystem", "popunder", "propellerads", "exoclick", "doubleclick", "analytics", "tracker", "syndication", "adserver"];
-                  if (adHosts.any((host) => url.contains(host))) {
-                    return WebResourceResponse(contentType: "text/plain", data: Uint8List(0));
-                  }
+                  if (adHosts.any((host) => url.contains(host))) return WebResourceResponse(contentType: "text/plain", data: Uint8List(0));
                 }
                 if (_isMediaUrl(url)) {
                   Future.microtask(() => _addSniffedLink(request.url.toString()));
@@ -601,9 +567,7 @@ class _BrowserPageState extends State<BrowserPage> {
   }
 
   bool _isMediaUrl(String url) {
-    return url.contains(".mp4") || url.contains(".m3u8") || 
-           url.contains(".webm") || url.contains(".mp3") || 
-           url.contains(".m4a") || url.contains(".ts");
+    return url.contains(".mp4") || url.contains(".m3u8") || url.contains(".webm") || url.contains(".mp3") || url.contains(".m4a") || url.contains(".ts");
   }
 
   void _showSniffedLinksSheet() {
@@ -619,23 +583,12 @@ class _BrowserPageState extends State<BrowserPage> {
       builder: (context) => Container(
         height: MediaQuery.of(context).size.height * 0.6,
         padding: const EdgeInsets.all(20),
-        decoration: const BoxDecoration(
-          color: AppColors.bgDark,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(25)),
-          border: Border(top: BorderSide(color: AppColors.border)),
-        ),
+        decoration: const BoxDecoration(color: AppColors.bgDark, borderRadius: BorderRadius.vertical(top: Radius.circular(25)), border: Border(top: BorderSide(color: AppColors.border))),
         child: Column(
           children: [
             Container(width: 50, height: 5, decoration: BoxDecoration(color: AppColors.border, borderRadius: BorderRadius.circular(5))),
             const SizedBox(height: 20),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Icon(Icons.radar_rounded, color: AppColors.primary),
-                const SizedBox(width: 10),
-                Text("تم اصطياد ${_sniffedLinks.length} ملف", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Colors.white)),
-              ],
-            ),
+            Row(mainAxisAlignment: MainAxisAlignment.center, children: [const Icon(Icons.radar_rounded, color: AppColors.primary), const SizedBox(width: 10), Text("تم اصطياد ${_sniffedLinks.length} ملف", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Colors.white))]),
             const SizedBox(height: 20),
             Expanded(
               child: ListView.separated(
@@ -643,7 +596,9 @@ class _BrowserPageState extends State<BrowserPage> {
                 separatorBuilder: (_, __) => const SizedBox(height: 10),
                 itemBuilder: (context, index) {
                   String link = _sniffedLinks.keys.elementAt(index);
-                  String rawTitle = _sniffedLinks[link] ?? "Video_Playback";
+                  var data = _sniffedLinks[link]!;
+                  String rawTitle = data["title"] ?? "Video_Playback";
+                  String sizeStr = data["size"] ?? "حجم غير معروف";
                   bool isAudio = link.toLowerCase().contains(".mp3") || link.toLowerCase().contains(".m4a");
                   
                   return Container(
@@ -651,13 +606,13 @@ class _BrowserPageState extends State<BrowserPage> {
                     child: ListTile(
                       leading: Icon(isAudio ? Icons.music_note : Icons.movie, color: isAudio ? AppColors.telegramBlue : AppColors.primary),
                       title: Text(rawTitle, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                      subtitle: Text(isAudio ? "ملف صوتي" : "ملف فيديو", style: const TextStyle(color: AppColors.textMain, fontSize: 12)),
+                      // 💡 عرض الحجم تحت الاسم
+                      subtitle: Text("${isAudio ? 'ملف صوتي' : 'ملف فيديو'} • $sizeStr", style: const TextStyle(color: AppColors.textMain, fontSize: 12)),
                       trailing: ElevatedButton(
                         style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
                         onPressed: () {
                           Navigator.pop(context);
                           String ext = isAudio ? ".mp3" : ".mp4";
-                          // لو الاسم طويل جداً نقصه عشان مسار الجهاز
                           if (rawTitle.length > 40) rawTitle = rawTitle.substring(0, 40);
                           String fileName = "$rawTitle - ${DateTime.now().millisecondsSinceEpoch}$ext";
                           
@@ -704,47 +659,40 @@ class _BrowserPageState extends State<BrowserPage> {
         }
       },
       itemBuilder: (context) => [
-        _buildPopupItem('toggle_adblock', _adBlockEnabled ? "إيقاف الإعلانات (مفعّل)" : "تشغيل الإعلانات (متوقّف)", _adBlockEnabled ? Icons.block : Icons.check_circle_outline, _adBlockEnabled ? Colors.red : Colors.green),
+        PopupMenuItem(value: 'toggle_adblock', child: Row(children: [Icon(_adBlockEnabled ? Icons.block : Icons.check_circle_outline, color: _adBlockEnabled ? Colors.red : Colors.green, size: 20), const SizedBox(width: 10), Text(_adBlockEnabled ? "إيقاف الإعلانات (مفعّل)" : "تشغيل الإعلانات (متوقّف)", style: const TextStyle(color: AppColors.textMain))])),
         const PopupMenuDivider(height: 0.5),
-        _buildPopupItem('toggle_desktop', _desktopMode ? "وضع الجوال" : "سطح المكتب", Icons.desktop_mac_rounded, AppColors.telegramBlue),
+        PopupMenuItem(value: 'toggle_desktop', child: Row(children: [const Icon(Icons.desktop_mac_rounded, color: AppColors.telegramBlue, size: 20), const SizedBox(width: 10), Text(_desktopMode ? "وضع الجوال" : "سطح المكتب", style: const TextStyle(color: AppColors.textMain))])),
         const PopupMenuDivider(height: 0.5),
-        _buildPopupItem('clear_sniffer', "مسح الروابط المصطادة", Icons.cleaning_services_rounded, Colors.orange),
+        PopupMenuItem(value: 'clear_sniffer', child: Row(children: [const Icon(Icons.cleaning_services_rounded, color: Colors.orange, size: 20), const SizedBox(width: 10), const Text("مسح الروابط المصطادة", style: TextStyle(color: AppColors.textMain))])),
         const PopupMenuDivider(height: 0.5),
-        _buildPopupItem('close_browser', "الرجوع لـ Google", Icons.close_rounded, Colors.white),
+        PopupMenuItem(value: 'close_browser', child: Row(children: [const Icon(Icons.close_rounded, color: Colors.white, size: 20), const SizedBox(width: 10), const Text("الرجوع لـ Google", style: TextStyle(color: Colors.white))])),
       ],
-    );
-  }
-
-  PopupMenuItem<String> _buildPopupItem(String value, String text, IconData icon, Color color) {
-    return PopupMenuItem<String>(
-      value: value,
-      child: Row(children: [Icon(icon, color: color, size: 20), const SizedBox(width: 10), Text(text, style: TextStyle(color: AppColors.textMain))]),
     );
   }
 }
 
 // -----------------------------------------------------------------------------
-// شاشة التحميلات مع عرض مباشر (Live Progress)
+// شاشة التحميلات - تم تحويل State لـ Public
 // -----------------------------------------------------------------------------
 class DownloadsPage extends StatefulWidget {
   const DownloadsPage({super.key});
   @override
-  State<DownloadsPage> createState() => _DownloadsPageState();
+  State<DownloadsPage> createState() => DownloadsPageState();
 }
 
-class _DownloadsPageState extends State<DownloadsPage> {
+class DownloadsPageState extends State<DownloadsPage> {
   List<FileSystemEntity> _files = [];
   bool _isLoading = true;
 
   @override
   void initState() {
     super.initState();
-    _loadFiles();
-    // تفعيل التحديث التلقائي لما أي تحميل يخلص
-    DownloadManager().onDownloadComplete = _loadFiles;
+    loadFiles();
+    DownloadManager().onDownloadComplete = loadFiles;
   }
   
-  Future<void> _loadFiles() async {
+  // دالة جلب الملفات بقت Public عشان نقدر نستدعيها من أي مكان
+  Future<void> loadFiles() async {
     setState(() => _isLoading = true);
     final dir = Directory("/storage/emulated/0/Download");
     if (!await dir.exists()) {
@@ -754,9 +702,7 @@ class _DownloadsPageState extends State<DownloadsPage> {
     
     final List<FileSystemEntity> allFiles = dir.listSync();
     setState(() {
-      _files = allFiles.where((f) {
-        return f.path.endsWith(".mp4") || f.path.endsWith(".mp3") || f.path.endsWith(". Hunter_");
-      }).toList();
+      _files = allFiles.where((f) => f.path.endsWith(".mp4") || f.path.endsWith(".mp3") || f.path.endsWith(". Hunter_")).toList();
       _isLoading = false;
     });
   }
@@ -767,7 +713,6 @@ class _DownloadsPageState extends State<DownloadsPage> {
       appBar: AppBar(title: const Text("التحميلات الخاصة بي", style: TextStyle(fontWeight: FontWeight.bold)), backgroundColor: Colors.transparent, centerTitle: true),
       body: Column(
         children: [
-          // 1. قسم التحميلات النشطة (Live Tracker)
           ValueListenableBuilder<List<ActiveDownload>>(
             valueListenable: DownloadManager().activeDownloadsNotifier,
             builder: (context, activeList, child) {
@@ -789,13 +734,7 @@ class _DownloadsPageState extends State<DownloadsPage> {
                           children: [
                             Text(dl.fileName, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold), maxLines: 1, overflow: TextOverflow.ellipsis),
                             const SizedBox(height: 10),
-                            LinearProgressIndicator(
-                              value: dl.progress,
-                              backgroundColor: AppColors.border,
-                              color: AppColors.primary,
-                              borderRadius: BorderRadius.circular(5),
-                              minHeight: 8,
-                            ),
+                            LinearProgressIndicator(value: dl.progress, backgroundColor: AppColors.border, color: AppColors.primary, borderRadius: BorderRadius.circular(5), minHeight: 8),
                             const SizedBox(height: 5),
                             Align(alignment: Alignment.centerLeft, child: Text("${(dl.progress * 100).toStringAsFixed(1)} %", style: const TextStyle(color: AppColors.textMain, fontSize: 12))),
                           ],
@@ -809,7 +748,6 @@ class _DownloadsPageState extends State<DownloadsPage> {
             },
           ),
 
-          // 2. قسم التحميلات المكتملة
           Expanded(
             child: _isLoading ? const Center(child: CircularProgressIndicator(color: AppColors.primary)) : _files.isEmpty ? _buildEmptyState() : _buildFilesList(),
           ),
@@ -838,13 +776,8 @@ class _DownloadsPageState extends State<DownloadsPage> {
             contentPadding: const EdgeInsets.all(15),
             leading: Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: (isVideo ? AppColors.primary : AppColors.telegramBlue).withOpacity(0.1), borderRadius: BorderRadius.circular(10)), child: Icon(isVideo ? Icons.movie_rounded : Icons.music_note_rounded, color: isVideo ? AppColors.primary : AppColors.telegramBlue, size: 28)),
             title: Text(file.path.split('/').last, style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white), maxLines: 2, overflow: TextOverflow.ellipsis),
-            onTap: () async {
-              await OpenFile.open(file.path);
-            },
-            trailing: IconButton(icon: const Icon(Icons.delete_forever, color: Colors.red), onPressed: () async {
-              await file.delete();
-              _loadFiles();
-            }),
+            onTap: () async { await OpenFile.open(file.path); },
+            trailing: IconButton(icon: const Icon(Icons.delete_forever, color: Colors.red), onPressed: () async { await file.delete(); loadFiles(); }),
           ),
         );
       },
@@ -878,9 +811,7 @@ class _SettingsPageState extends State<SettingsPage> {
   Future<void> _launchTelegram() async {
     final Uri url = Uri.parse("https://t.me/Radwan263");
     if (!await launchUrl(url, mode: LaunchMode.externalApplication)) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("لم نتمكن من فتح تليجرام. تأكد من تثبيت التطبيق")));
-      }
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("لم نتمكن من فتح تليجرام.")));
     }
   }
 
@@ -895,7 +826,6 @@ class _SettingsPageState extends State<SettingsPage> {
           const SizedBox(height: 25),
           const Divider(color: AppColors.border),
           const SizedBox(height: 25),
-          
           const Text("حول التطبيق والمطور", style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold, fontSize: 16)),
           const SizedBox(height: 15),
           Card(
@@ -917,4 +847,3 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 }
-
