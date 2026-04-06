@@ -3,7 +3,7 @@ import 'dart:io';
 import 'dart:ui';
 import 'dart:typed_data'; 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart'; // <-- تم الإضافة عشان نتحكم في زر الخروج
+import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart' as yt;
 import 'package:dio/dio.dart';
@@ -65,6 +65,9 @@ class RMediaHunterApp extends StatelessWidget {
   }
 }
 
+// -----------------------------------------------------------------------------
+// شاشة البداية مع نظام القفل
+// -----------------------------------------------------------------------------
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
   @override
@@ -131,6 +134,9 @@ class _SplashScreenState extends State<SplashScreen> {
   }
 }
 
+// -----------------------------------------------------------------------------
+// الشاشة الرئيسية ونظام التنقل مع PopScope
+// -----------------------------------------------------------------------------
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
   @override
@@ -143,13 +149,11 @@ class _MainScreenState extends State<MainScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // إحاطة الشاشة بـ PopScope للتحكم في زر الرجوع
     return PopScope(
       canPop: false, 
       onPopInvokedWithResult: (didPop, result) async {
         if (didPop) return;
 
-        // 1. لو إنت في المتصفح والموقع فيه صفحة سابقة، ارجع للموقع اللي قبله
         if (_selectedIndex == 1 && globalBrowserController != null) {
           if (await globalBrowserController!.canGoBack()) {
             globalBrowserController!.goBack();
@@ -157,7 +161,6 @@ class _MainScreenState extends State<MainScreen> {
           }
         }
 
-        // 2. لو إنت في أي قسم غير الرئيسية، ارجع للرئيسية بدل ما تقفل التطبيق
         if (_selectedIndex != 0) {
           setState(() {
             _selectedIndex = 0;
@@ -166,7 +169,6 @@ class _MainScreenState extends State<MainScreen> {
           return;
         }
 
-        // 3. لو إنت في الرئيسية ومفيش حاجة وراك، اقفل التطبيق
         SystemNavigator.pop();
       },
       child: Scaffold(
@@ -224,6 +226,9 @@ class _MainScreenState extends State<MainScreen> {
   }
 }
 
+// -----------------------------------------------------------------------------
+// مدير التحميل الذكي
+// -----------------------------------------------------------------------------
 class DownloadManager {
   static final DownloadManager _instance = DownloadManager._internal();
   factory DownloadManager() => _instance;
@@ -270,6 +275,9 @@ class DownloadManager {
   }
 }
 
+// -----------------------------------------------------------------------------
+// الصفحة الرئيسية وصائد الروابط
+// -----------------------------------------------------------------------------
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
   @override
@@ -410,6 +418,9 @@ class _HomePageState extends State<HomePage> {
   }
 }
 
+// -----------------------------------------------------------------------------
+// شاشة المتصفح الذكي - نظام IDM+ (Sniffer & Address Bar)
+// -----------------------------------------------------------------------------
 class BrowserPage extends StatefulWidget {
   const BrowserPage({super.key});
   @override
@@ -421,45 +432,115 @@ class _BrowserPageState extends State<BrowserPage> {
   double _progress = 0;
   bool _adBlockEnabled = true; 
   bool _desktopMode = false;   
-  final String _initialUrl = "https://www.google.com";
+  
+  final TextEditingController _urlController = TextEditingController(text: "https://www.google.com");
+  Set<String> _sniffedLinks = {}; 
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        title: const Text("المتصفح الذكي", style: TextStyle(fontWeight: FontWeight.bold)),
-        flexibleSpace: Container(decoration: const BoxDecoration(color: AppColors.cardBg)),
-        actions: [
-          _buildBrowserPopupMenu(),
-        ],
+      appBar: PreferredSize(
+        preferredSize: const Size.fromHeight(65),
+        child: AppBar(
+          backgroundColor: AppColors.cardBg,
+          elevation: 0,
+          flexibleSpace: SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 8.0),
+              child: Row(
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.home_rounded, color: AppColors.primary),
+                    onPressed: () {
+                      webViewController?.loadUrl(urlRequest: URLRequest(url: WebUri("https://www.google.com")));
+                    },
+                  ),
+                  
+                  Expanded(
+                    child: Container(
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: AppColors.bgDark,
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: AppColors.border),
+                      ),
+                      child: TextField(
+                        controller: _urlController,
+                        style: const TextStyle(fontSize: 14),
+                        keyboardType: TextInputType.url,
+                        textInputAction: TextInputAction.go,
+                        onSubmitted: (value) {
+                          var url = value.startsWith("http") ? value : "https://www.google.com/search?q=$value";
+                          webViewController?.loadUrl(urlRequest: URLRequest(url: WebUri(url)));
+                        },
+                        decoration: const InputDecoration(
+                          hintText: "ابحث أو أدخل رابطاً...",
+                          border: InputBorder.none,
+                          contentPadding: EdgeInsets.symmetric(horizontal: 15, vertical: 10),
+                        ),
+                      ),
+                    ),
+                  ),
+
+                  Stack(
+                    alignment: Alignment.topRight,
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.download_for_offline_rounded, size: 28, color: AppColors.textMain),
+                        onPressed: _showSniffedLinksSheet,
+                      ),
+                      if (_sniffedLinks.isNotEmpty)
+                        Positioned(
+                          right: 8,
+                          top: 8,
+                          child: Container(
+                            padding: const EdgeInsets.all(4),
+                            decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
+                            child: Text(
+                              '${_sniffedLinks.length}',
+                              style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                        )
+                    ],
+                  ),
+
+                  _buildBrowserPopupMenu(),
+                ],
+              ),
+            ),
+          ),
+        ),
       ),
       body: Column(
         children: [
-          if (_progress < 1.0) LinearProgressIndicator(value: _progress, color: AppColors.primary, backgroundColor: AppColors.border),
+          if (_progress < 1.0) LinearProgressIndicator(value: _progress, color: AppColors.primary, backgroundColor: AppColors.cardBg, minHeight: 3),
           Expanded(
             child: InAppWebView(
-              initialUrlRequest: URLRequest(url: WebUri(_initialUrl)),
+              initialUrlRequest: URLRequest(url: WebUri("https://www.google.com")),
               initialSettings: InAppWebViewSettings(
                 javaScriptEnabled: true,
                 verticalScrollBarEnabled: true,
-                horizontalScrollBarEnabled: false, 
-                // الضربة الأولى للإعلانات: منع النوافذ المنبثقة اللي بتفتح فجأة
                 supportMultipleWindows: false, 
-                javaScriptCanOpenWindowsAutomatically: false, 
+                javaScriptCanOpenWindowsAutomatically: false,
                 userAgent: _desktopMode ? "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36" : "Mozilla/5.0 (Linux; Android 13) Chrome/116.0.0.0 Mobile Safari/537.36",
-                builtInZoomControls: true, 
-                displayZoomControls: false,
-                supportZoom: true,
               ),
               onWebViewCreated: (controller) {
-                // ربط المتصفح بالمتغير العام عشان زر الرجوع
                 globalBrowserController = controller; 
                 webViewController = controller;
               },
-              onProgressChanged: (c, p) => setState(() => _progress = p / 100),
+              onLoadStart: (controller, url) {
+                setState(() {
+                  _urlController.text = url.toString();
+                  _sniffedLinks.clear(); 
+                });
+              },
+              onUpdateVisitedHistory: (controller, url, androidIsReload) {
+                setState(() {
+                  _urlController.text = url.toString();
+                });
+              },
               onLoadStop: (controller, url) async {
-                // الضربة التانية للإعلانات: حقن كود جافاسكريبت يمسح مساحة الإعلان من الموقع نفسه!
                 if (_adBlockEnabled) {
                   await controller.evaluateJavascript(source: """
                     var style = document.createElement('style');
@@ -469,20 +550,123 @@ class _BrowserPageState extends State<BrowserPage> {
                   """);
                 }
               },
+              onProgressChanged: (controller, progress) async {
+                setState(() => _progress = progress / 100);
+                
+                if (progress == 100) {
+                  var result = await controller.evaluateJavascript(source: """
+                    (function() {
+                      var media = document.querySelectorAll('video, audio, source');
+                      var urls = [];
+                      for(var i=0; i<media.length; i++) {
+                        if(media[i].src && media[i].src.startsWith('http')) urls.push(media[i].src);
+                      }
+                      return urls.join(',');
+                    })();
+                  """);
+                  if (result != null && result.toString().isNotEmpty) {
+                    List<String> urls = result.toString().split(',');
+                    setState(() {
+                      for(var u in urls) {
+                        if(_isMediaUrl(u)) _sniffedLinks.add(u);
+                      }
+                    });
+                  }
+                }
+              },
               shouldInterceptRequest: (controller, request) async {
-                // الضربة التالتة للإعلانات: قائمة سوداء قوية جداً لسيرفرات الإعلانات
+                final url = request.url.toString().toLowerCase();
+                
                 if (_adBlockEnabled) {
-                  final url = request.url.toString().toLowerCase();
-                  final adHosts = ["ads", "adsystem", "popunder", "propellerads", "exoclick", "doubleclick", "analytics", "tracker", "adserver", "syndication"];
+                  final adHosts = ["ads", "adsystem", "popunder", "propellerads", "exoclick", "doubleclick", "analytics", "tracker", "syndication", "adserver"];
                   if (adHosts.any((host) => url.contains(host))) {
                     return WebResourceResponse(contentType: "text/plain", data: Uint8List(0));
                   }
+                }
+
+                if (_isMediaUrl(url)) {
+                  Future.microtask(() {
+                    if (!_sniffedLinks.contains(request.url.toString())) {
+                      setState(() => _sniffedLinks.add(request.url.toString()));
+                    }
+                  });
                 }
                 return null;
               },
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  bool _isMediaUrl(String url) {
+    return url.contains(".mp4") || url.contains(".m3u8") || 
+           url.contains(".webm") || url.contains(".mp3") || 
+           url.contains(".m4a") || url.contains(".ts");
+  }
+
+  void _showSniffedLinksSheet() {
+    if (_sniffedLinks.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("لم يتم التقاط أي روابط ميديا في هذه الصفحة بعد.")));
+      return;
+    }
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (context) => Container(
+        height: MediaQuery.of(context).size.height * 0.6,
+        padding: const EdgeInsets.all(20),
+        decoration: const BoxDecoration(
+          color: AppColors.bgDark,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(25)),
+          border: Border(top: BorderSide(color: AppColors.border)),
+        ),
+        child: Column(
+          children: [
+            Container(width: 50, height: 5, decoration: BoxDecoration(color: AppColors.border, borderRadius: BorderRadius.circular(5))),
+            const SizedBox(height: 20),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.radar_rounded, color: AppColors.primary),
+                const SizedBox(width: 10),
+                Text("تم اصطياد ${_sniffedLinks.length} ملف", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Colors.white)),
+              ],
+            ),
+            const SizedBox(height: 20),
+            Expanded(
+              child: ListView.separated(
+                itemCount: _sniffedLinks.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 10),
+                itemBuilder: (context, index) {
+                  String link = _sniffedLinks.elementAt(index);
+                  bool isAudio = link.toLowerCase().contains(".mp3") || link.toLowerCase().contains(".m4a");
+                  
+                  return Container(
+                    decoration: BoxDecoration(color: AppColors.cardBg, borderRadius: BorderRadius.circular(15), border: Border.all(color: AppColors.border)),
+                    child: ListTile(
+                      leading: Icon(isAudio ? Icons.music_note : Icons.movie, color: isAudio ? AppColors.telegramBlue : AppColors.primary),
+                      title: Text("ملف ميديا ${index + 1}", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                      subtitle: Text(link, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: AppColors.textMain, fontSize: 10)),
+                      trailing: ElevatedButton(
+                        style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+                        onPressed: () {
+                          Navigator.pop(context);
+                          String ext = isAudio ? ".mp3" : ".mp4";
+                          DownloadManager().startDownload(context, link, "Hunter_Sniff_${DateTime.now().millisecondsSinceEpoch}$ext", isAudio);
+                        },
+                        child: const Text("تحميل", style: TextStyle(color: Colors.white)),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -503,13 +687,14 @@ class _BrowserPageState extends State<BrowserPage> {
             setState(() => _desktopMode = !_desktopMode);
             var settings = await webViewController?.getSettings();
             settings?.userAgent = _desktopMode ? "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36" : "Mozilla/5.0 (Linux; Android 13) Chrome/116.0.0.0 Mobile Safari/537.36";
-            if (settings != null) {
-              await webViewController?.setSettings(settings: settings);
-            }
+            if (settings != null) await webViewController?.setSettings(settings: settings);
             await webViewController?.reload();
             break;
+          case 'clear_sniffer':
+            setState(() => _sniffedLinks.clear());
+            break;
           case 'close_browser':
-            await webViewController?.loadUrl(urlRequest: URLRequest(url: WebUri(_initialUrl)));
+            await webViewController?.loadUrl(urlRequest: URLRequest(url: WebUri("https://www.google.com")));
             break;
         }
       },
@@ -518,7 +703,9 @@ class _BrowserPageState extends State<BrowserPage> {
         const PopupMenuDivider(height: 0.5),
         _buildPopupItem('toggle_desktop', _desktopMode ? "وضع الجوال" : "سطح المكتب", Icons.desktop_mac_rounded, AppColors.telegramBlue),
         const PopupMenuDivider(height: 0.5),
-        _buildPopupItem('close_browser', "أغلق المتصفح", Icons.close_rounded, Colors.white),
+        _buildPopupItem('clear_sniffer', "مسح الروابط المصطادة", Icons.cleaning_services_rounded, Colors.orange),
+        const PopupMenuDivider(height: 0.5),
+        _buildPopupItem('close_browser', "الرجوع لـ Google", Icons.close_rounded, Colors.white),
       ],
     );
   }
@@ -526,11 +713,14 @@ class _BrowserPageState extends State<BrowserPage> {
   PopupMenuItem<String> _buildPopupItem(String value, String text, IconData icon, Color color) {
     return PopupMenuItem<String>(
       value: value,
-      child: Row(children: [Icon(icon, color: color, size: 20), const SizedBox(width: 10), Text(text, style: TextStyle(color: value == 'close_browser' ? Colors.white : AppColors.textMain))]),
+      child: Row(children: [Icon(icon, color: color, size: 20), const SizedBox(width: 10), Text(text, style: TextStyle(color: AppColors.textMain))]),
     );
   }
 }
 
+// -----------------------------------------------------------------------------
+// شاشة التحميلات
+// -----------------------------------------------------------------------------
 class DownloadsPage extends StatefulWidget {
   const DownloadsPage({super.key});
   @override
@@ -606,6 +796,9 @@ class _DownloadsPageState extends State<DownloadsPage> {
   }
 }
 
+// -----------------------------------------------------------------------------
+// شاشة الإعدادات
+// -----------------------------------------------------------------------------
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
   @override
