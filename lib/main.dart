@@ -531,5 +531,32 @@ class SettingsPage extends StatefulWidget {
 class _SettingsPageState extends State<SettingsPage> {
   bool _isLocked = false;
   @override
-  void initState() { super.initState(); _
-https://www.facebook.com/share/1TggNUaMx1/
+  void initState() { super.initState(); _load(); }
+  Future<void> _load() async {
+    final p = await SharedPreferences.getInstance();
+    setState(() => _isLocked = p.getBool('app_lock') ?? false);
+  }
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text("الإعدادات"), centerTitle: true, backgroundColor: Colors.transparent),
+      body: ListView(padding: const EdgeInsets.all(15), children: [
+        SwitchListTile(title: const Text("قفل التطبيق"), value: _isLocked, onChanged: (v) async {
+          final p = await SharedPreferences.getInstance(); await p.setBool('app_lock', v);
+          setState(() => _isLocked = v);
+        }, secondary: const Icon(Icons.fingerprint)),
+        const Divider(),
+        ListTile(title: const Text("المطور: Radwan Mohamed"), subtitle: const Text("تواصل عبر تليجرام: @Radwan263"), leading: const Icon(Icons.person), onTap: () => launchUrl(Uri.parse("https://t.me/Radwan263"))),
+        const Divider(),
+        // 💡 إضافة زر صياد الأخطاء هنا
+        ListTile(
+          title: const Text("تقرير صياد الأخطاء"),
+          subtitle: const Text("اضغط هنا لو واجهتك مشكلة تقنية"),
+          leading: const Icon(Icons.bug_report_rounded, color: Colors.orange),
+          onTap: () => ErrorHunter.showLast(context),
+        ),
+      ]),
+    );
+  }
+}
+
