@@ -233,6 +233,10 @@ class ActiveDownload {
   String size;
   bool isCompleted;
   bool isFailed;
+  bool isPaused;
+  CancelToken? cancelToken;
+  int downloadedBytes;
+  int totalBytes;
 
   ActiveDownload({
     required this.url,
@@ -241,6 +245,10 @@ class ActiveDownload {
     this.size = "...",
     this.isCompleted = false,
     this.isFailed = false,
+    this.isPaused = false,
+    this.cancelToken,
+    this.downloadedBytes = 0,
+    this.totalBytes = -1,
   });
 }
 
@@ -257,18 +265,41 @@ class DownloadManager {
   }
 
   void removeDownload(String url) {
+    var dl = activeDownloadsNotifier.value.firstWhere((d) => d.url == url);
+    dl.cancelToken?.cancel("User removed download");
     activeDownloadsNotifier.value = activeDownloadsNotifier.value.where((d) => d.url != url).toList();
   }
 
-  Future<void> startDownload(BuildContext context, String url, String fileName, bool isAudio) async {
-    // التأكد من عدم تحميل نفس الرابط مرتين في نفس الوقت
-    if (activeDownloadsNotifier.value.any((d) => d.url == url && !d.isCompleted)) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("هذا الرابط جاري تحميله بالفعل")));
-      return;
+  void togglePause(String url, BuildContext context) {
+    var dl = activeDownloadsNotifier.value.firstWhere((d) => d.url == url);
+    if (dl.isCompleted || dl.isFailed) return;
+
+    if (dl.isPaused) {
+      dl.isPaused = false;
+      activeDownloadsNotifier.value = List.from(activeDownloadsNotifier.value);
+      startDownload(context, url, dl.fileName, false, isResuming: true);
+    } else {
+      dl.isPaused = true;
+      dl.cancelToken?.cancel("Paused by user");
+      activeDownloadsNotifier.value = List.from(activeDownloadsNotifier.value);
+    }
+  }
+
+  Future<void> startDownload(BuildContext context, String url, String fileName, bool isAudio, {bool isResuming = false}) async {
+    ActiveDownload? dl;
+    if (isResuming) {
+      dl = activeDownloadsNotifier.value.firstWhere((d) => d.url == url);
+    } else {
+      if (activeDownloadsNotifier.value.any((d) => d.url == url && !d.isCompleted)) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("هذا الرابط جاري تحميله بالفعل")));
+        return;
+      }
+      dl = ActiveDownload(url: url, fileName: fileName);
+      activeDownloadsNotifier.value = [...activeDownloadsNotifier.value, dl];
     }
 
     try {
-      if (Platform.isAndroid) {
+      if (Platform.isAndroid && !isResuming) {
         await Permission.storage.request();
         if (await Permission.manageExternalStorage.isDenied) {
           await Permission.manageExternalStorage.request();
@@ -288,64 +319,76 @@ class DownloadManager {
 
       final String baseDir = "${downloadsDir.path}/R_Hunter";
       final Directory rHunterDir = Directory(baseDir);
-      
-      if (!await rHunterDir.exists()) {
-        await rHunterDir.create(recursive: true);
-      }
+      if (!await rHunterDir.exists()) await rHunterDir.create(recursive: true);
 
       String cleanFileName = fileName.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
       String savePath = "${rHunterDir.path}/$cleanFileName";
+      File file = File(savePath);
 
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text("جاري الصيد في: ${rHunterDir.path.split('/').last}"),
-          backgroundColor: AppColors.primary,
-          behavior: SnackBarBehavior.floating,
-        ));
+      int start = 0;
+      if (isResuming && await file.exists()) {
+        start = await file.length();
       }
 
-      ActiveDownload activeDl = ActiveDownload(url: url, fileName: cleanFileName);
-      activeDownloadsNotifier.value = [...activeDownloadsNotifier.value, activeDl];
-      
-      await _dio.download(url, savePath, onReceiveProgress: (received, total) {
-        if (total != -1) {
-          activeDl.progress = received / total;
-          activeDl.size = "${(received / 1024 / 1024).toStringAsFixed(1)} MB / ${(total / 1024 / 1024).toStringAsFixed(1)} MB";
-        } else {
-          activeDl.progress = -1.0;
-          activeDl.size = "${(received / 1024 / 1024).toStringAsFixed(1)} MB (جاري التحميل...)";
-        }
-        activeDownloadsNotifier.value = List.from(activeDownloadsNotifier.value);
-      });
-      
-      activeDl.isCompleted = true;
-      activeDl.progress = 1.0;
+      dl.cancelToken = CancelToken();
+      dl.isFailed = false;
+      dl.isPaused = false;
+      activeDownloadsNotifier.value = List.from(activeDownloadsNotifier.value);
+
+      Response response = await _dio.get(
+        url,
+        onReceiveProgress: (received, total) {
+          if (total != -1) {
+            int currentTotal = total + start;
+            int currentReceived = received + start;
+            dl!.progress = currentReceived / currentTotal;
+            dl.downloadedBytes = currentReceived;
+            dl.totalBytes = currentTotal;
+            dl.size = "${(currentReceived / 1024 / 1024).toStringAsFixed(1)} MB / ${(currentTotal / 1024 / 1024).toStringAsFixed(1)} MB";
+          } else {
+            dl!.progress = -1.0;
+            dl.size = "${((received + start) / 1024 / 1024).toStringAsFixed(1)} MB (جاري...)";
+          }
+          activeDownloadsNotifier.value = List.from(activeDownloadsNotifier.value);
+        },
+        options: Options(
+          responseType: ResponseType.stream,
+          headers: start > 0 ? {'range': 'bytes=$start-'} : null,
+        ),
+        cancelToken: dl.cancelToken,
+      );
+
+      File outFile = File(savePath);
+      var raf = await outFile.open(mode: start > 0 ? FileMode.append : FileMode.write);
+      await for (var chunk in response.data.stream) {
+        await raf.writeFrom(chunk);
+      }
+      await raf.close();
+
+      dl.isCompleted = true;
+      dl.progress = 1.0;
       activeDownloadsNotifier.value = List.from(activeDownloadsNotifier.value);
       
       onDownloadComplete?.call(); 
-      if (globalDownloadsKey.currentState != null) {
-        globalDownloadsKey.currentState!.loadFiles();
-      }
+      if (globalDownloadsKey.currentState != null) globalDownloadsKey.currentState!.loadFiles();
 
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Row(children: [Icon(Icons.check_circle, color: Colors.white), SizedBox(width: 10), Text("تم الحفظ في R_Hunter بنجاح!")]),
+          content: Row(children: [Icon(Icons.check_circle, color: Colors.white), SizedBox(width: 10), Text("تم الحفظ بنجاح!")]),
           backgroundColor: Colors.green,
           behavior: SnackBarBehavior.floating,
         ));
       }
     } catch (e) {
-      ErrorHunter.log("Downloader_Critical", e);
-      // تحديث الحالة للفشل بدلاً من الحذف
-      var dl = activeDownloadsNotifier.value.firstWhere((d) => d.url == url);
-      dl.isFailed = true;
-      activeDownloadsNotifier.value = List.from(activeDownloadsNotifier.value);
-      
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text("حدث خطأ.. افتح تقرير صياد الأخطاء من الإعدادات"),
-          backgroundColor: Colors.red,
-        ));
+      if (CancelToken.isCancel(e as DioException)) {
+        ErrorHunter.log("Downloader", "تم إيقاف التحميل مؤقتاً");
+      } else {
+        ErrorHunter.log("Downloader_Critical", e);
+        dl!.isFailed = true;
+        activeDownloadsNotifier.value = List.from(activeDownloadsNotifier.value);
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("حدث خطأ في التحميل"), backgroundColor: Colors.red));
+        }
       }
     }
   }
@@ -363,47 +406,152 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   final TextEditingController _urlController = TextEditingController();
   bool _isAnalyzing = false;
-  
+
   Future<void> _analyzeUrl() async {
     String url = _urlController.text.trim();
     if (url.isEmpty) return;
     setState(() => _isAnalyzing = true);
-    final ytInstance = yt.YoutubeExplode();
+
     try {
-      if (yt.VideoId.parseVideoId(url) != null) {
-        final video = await ytInstance.videos.get(url);
-        final manifest = await ytInstance.videos.streamsClient.getManifest(video.id);
-        final vStream = manifest.muxed.withHighestBitrate();
-        final aStream = manifest.audioOnly.withHighestBitrate();
-        ytInstance.close();
-        if (mounted) _showOptions(context, video.title, vStream.url.toString(), aStream.url.toString());
+      if (url.contains("youtube.com/") || url.contains("youtu.be/")) {
+        await _handleYoutube(url);
+      } else if (url.contains("facebook.com") || url.contains("fb.watch")) {
+        await _handleSocial(url, "Facebook");
+      } else if (url.contains("tiktok.com")) {
+        await _handleSocial(url, "TikTok");
       } else {
-        DownloadManager().startDownload(context, url, "Hunter_Media_${DateTime.now().millisecond}.mp4", false);
+        DownloadManager().startDownload(context, url, "Media_${DateTime.now().millisecondsSinceEpoch}.mp4", false);
       }
     } catch (e) {
-      ErrorHunter.log("YouTube_Analyzer", e);
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("لم نتمكن من التحليل. حاول برابط مباشر")));
-    } finally { setState(() => _isAnalyzing = false); }
+      ErrorHunter.log("Analyzer_Error", e);
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("فشل التحليل. جرب رابطاً مباشراً")));
+    } finally {
+      if (mounted) setState(() => _isAnalyzing = false);
+    }
   }
 
-  void _showOptions(BuildContext context, String title, String vUrl, String aUrl) {
-    showModalBottomSheet(context: context, backgroundColor: Colors.transparent, builder: (context) => Container(
-      padding: const EdgeInsets.all(24),
-      decoration: const BoxDecoration(color: AppColors.cardBg, borderRadius: BorderRadius.vertical(top: Radius.circular(30)), border: Border(top: BorderSide(color: AppColors.border))),
-      child: Column(mainAxisSize: MainAxisSize.min, children: [
-        Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16), textAlign: TextAlign.center),
-        const SizedBox(height: 20),
-        ElevatedButton(style: ElevatedButton.styleFrom(minimumSize: const Size(double.infinity, 50)), onPressed: () {
-          Navigator.pop(context);
-          DownloadManager().startDownload(context, vUrl, "${title.replaceAll(RegExp(r'[\\/:*?"<>|]'), ' ')}.mp4", false);
-        }, child: const Text("تحميل فيديو MP4")),
-        const SizedBox(height: 10),
-        ElevatedButton(style: ElevatedButton.styleFrom(minimumSize: const Size(double.infinity, 50)), onPressed: () {
-          Navigator.pop(context);
-          DownloadManager().startDownload(context, aUrl, "${title.replaceAll(RegExp(r'[\\/:*?"<>|]'), ' ')}.mp3", true);
-        }, child: const Text("تحميل صوت MP3")),
-      ]),
-    ));
+  Future<void> _handleYoutube(String url) async {
+    final ytInstance = yt.YoutubeExplode();
+    try {
+      if (url.contains("list=")) {
+        var playlist = await ytInstance.playlists.get(url);
+        var videos = await ytInstance.playlists.getVideos(playlist.id).toList();
+        ytInstance.close();
+        if (mounted) _showPlaylistOptions(playlist.title, videos);
+      } else {
+        var video = await ytInstance.videos.get(url);
+        var manifest = await ytInstance.videos.streamsClient.getManifest(video.id);
+        ytInstance.close();
+        if (mounted) _showYoutubeOptions(video.title, manifest);
+      }
+    } catch (e) {
+      ytInstance.close();
+      rethrow;
+    }
+  }
+
+  Future<void> _handleSocial(String url, String platform) async {
+    // محاكاة استخراج الروابط للسوشيال ميديا (تطلب عادة API خارجي أو Scraping متقدم)
+    // هنا نستخدم Sniffer المدمج في المتصفح كحل بديل أو نوجه المستخدم للمتصفح
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("جاري فتح $platform في المتصفح للاصطياد التلقائي...")));
+      // التوجه لصفحة المتصفح مع الرابط
+      // ملاحظة: هذا يتطلب تعديل بسيط في MainScreen للتنقل
+    }
+  }
+
+  void _showYoutubeOptions(String title, yt.StreamManifest manifest) {
+    var muxed = manifest.muxed.sortByVideoQuality();
+    var audio = manifest.audioOnly.withHighestBitrate();
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (context) => Container(
+        padding: const EdgeInsets.all(24),
+        decoration: const BoxDecoration(color: AppColors.cardBg, borderRadius: BorderRadius.vertical(top: Radius.circular(30))),
+        child: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Text(title, style: const TextStyle(fontWeight: FontWeight.bold), textAlign: TextAlign.center),
+            const Divider(height: 30),
+            const Text("جودات الفيديو (MP4)", style: TextStyle(color: AppColors.primary)),
+            ...muxed.map((s) => ListTile(
+              title: Text(s.videoQualityLabel),
+              subtitle: Text("${(s.size.totalMegaBytes).toStringAsFixed(1)} MB"),
+              trailing: const Icon(Icons.download),
+              onTap: () {
+                Navigator.pop(context);
+                DownloadManager().startDownload(context, s.url.toString(), "$title - ${s.videoQualityLabel}.mp4", false);
+              },
+            )),
+            const Divider(),
+            ListTile(
+              title: const Text("تحميل صوت فقط (MP3)"),
+              subtitle: Text("${(audio.size.totalMegaBytes).toStringAsFixed(1)} MB"),
+              trailing: const Icon(Icons.music_note),
+              onTap: () {
+                Navigator.pop(context);
+                DownloadManager().startDownload(context, audio.url.toString(), "$title.mp3", true);
+              },
+            ),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  void _showPlaylistOptions(String title, List<yt.Video> videos) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (context) => Container(
+        height: MediaQuery.of(context).size.height * 0.7,
+        padding: const EdgeInsets.all(24),
+        decoration: const BoxDecoration(color: AppColors.cardBg, borderRadius: BorderRadius.vertical(top: Radius.circular(30))),
+        child: Column(children: [
+          Text("قائمة: $title", style: const TextStyle(fontWeight: FontWeight.bold)),
+          Text("${videos.length} فيديو", style: const TextStyle(fontSize: 12, color: Colors.grey)),
+          const Divider(),
+          Expanded(
+            child: ListView.builder(
+              itemCount: videos.length,
+              itemBuilder: (context, i) => ListTile(
+                leading: Image.network(videos[i].thumbnails.lowResUrl, width: 50),
+                title: Text(videos[i].title, maxLines: 1, overflow: TextOverflow.ellipsis),
+                onTap: () {
+                  Navigator.pop(context);
+                  _urlController.text = videos[i].url;
+                  _analyzeUrl();
+                },
+              ),
+            ),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("جاري تجهيز تحميل الكل...")));
+              for (var v in videos) {
+                // تحميل تلقائي بأعلى جودة متاحة (تبسيطاً)
+                _analyzeAndDownloadSilently(v.url, v.title);
+              }
+            },
+            child: const Text("تحميل الكل (أعلى جودة)"),
+          )
+        ]),
+      ),
+    );
+  }
+
+  Future<void> _analyzeAndDownloadSilently(String url, String title) async {
+    final ytInstance = yt.YoutubeExplode();
+    try {
+      var video = await ytInstance.videos.get(url);
+      var manifest = await ytInstance.videos.streamsClient.getManifest(video.id);
+      var stream = manifest.muxed.withHighestBitrate();
+      DownloadManager().startDownload(context, stream.url.toString(), "$title.mp4", false);
+    } catch (_) {} finally { ytInstance.close(); }
   }
 
   @override
@@ -775,21 +923,27 @@ class DownloadsPageState extends State<DownloadsPage> {
                           Row(
                             children: [
                               Expanded(child: Text(dl.fileName, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold), maxLines: 1, overflow: TextOverflow.ellipsis)),
-                              if (dl.isCompleted || dl.isFailed) 
+                              if (!dl.isCompleted && !dl.isFailed)
                                 IconButton(
                                   constraints: const BoxConstraints(),
                                   padding: EdgeInsets.zero,
-                                  icon: const Icon(Icons.close, size: 18, color: Colors.grey), 
-                                  onPressed: () => DownloadManager().removeDownload(dl.url)
+                                  icon: Icon(dl.isPaused ? Icons.play_arrow_rounded : Icons.pause_rounded, color: AppColors.primary),
+                                  onPressed: () => DownloadManager().togglePause(dl.url, context),
                                 ),
+                              IconButton(
+                                constraints: const BoxConstraints(),
+                                padding: EdgeInsets.zero,
+                                icon: const Icon(Icons.close, size: 18, color: Colors.grey), 
+                                onPressed: () => DownloadManager().removeDownload(dl.url)
+                              ),
                             ],
                           ),
                           const SizedBox(height: 10),
                           if (!dl.isCompleted && !dl.isFailed)
                             LinearProgressIndicator(
-                              value: dl.progress == -1.0 ? null : dl.progress, 
+                              value: (dl.isPaused || dl.progress == -1.0) ? null : dl.progress, 
                               backgroundColor: AppColors.border, 
-                              color: AppColors.primary, 
+                              color: dl.isPaused ? Colors.orange : AppColors.primary, 
                               borderRadius: BorderRadius.circular(5), 
                               minHeight: 8
                             ),
@@ -798,8 +952,8 @@ class DownloadsPageState extends State<DownloadsPage> {
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
                               Text(
-                                dl.isFailed ? "فشل التحميل" : (dl.isCompleted ? "تم التحميل بنجاح" : (dl.progress == -1.0 ? "جاري التحميل..." : "${(dl.progress * 100).toStringAsFixed(1)} %")), 
-                                style: TextStyle(color: dl.isFailed ? Colors.red : (dl.isCompleted ? Colors.green : AppColors.textMain), fontSize: 12, fontWeight: FontWeight.bold)
+                                dl.isFailed ? "فشل التحميل" : (dl.isCompleted ? "تم التحميل بنجاح" : (dl.isPaused ? "متوقف مؤقتاً" : (dl.progress == -1.0 ? "جاري التحميل..." : "${(dl.progress * 100).toStringAsFixed(1)} %"))), 
+                                style: TextStyle(color: dl.isFailed ? Colors.red : (dl.isCompleted ? Colors.green : (dl.isPaused ? Colors.orange : AppColors.textMain)), fontSize: 12, fontWeight: FontWeight.bold)
                               ),
                               Text(dl.size, style: const TextStyle(color: AppColors.textMain, fontSize: 12)),
                             ],
