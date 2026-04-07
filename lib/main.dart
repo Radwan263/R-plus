@@ -335,6 +335,15 @@ class DownloadManager {
       dl.isPaused = false;
       activeDownloadsNotifier.value = List.from(activeDownloadsNotifier.value);
 
+      // إضافة Headers المتصفح لتجنب حظر السيرفر (خطأ 403)
+      Map<String, dynamic> headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': '*/*',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Connection': 'keep-alive',
+      };
+      if (start > 0) headers['range'] = 'bytes=$start-';
+
       Response response = await _dio.get(
         url,
         onReceiveProgress: (received, total) {
@@ -353,7 +362,9 @@ class DownloadManager {
         },
         options: Options(
           responseType: ResponseType.stream,
-          headers: start > 0 ? {'range': 'bytes=$start-'} : null,
+          headers: headers,
+          followRedirects: true,
+          validateStatus: (status) => status != null && status < 500,
         ),
         cancelToken: dl.cancelToken,
       );
@@ -549,7 +560,8 @@ class _HomePageState extends State<HomePage> {
     try {
       var video = await ytInstance.videos.get(url);
       var manifest = await ytInstance.videos.streamsClient.getManifest(video.id);
-      var stream = manifest.muxed.withHighestBitrate();
+      // استخدام جودة متوسطة لضمان سرعة التحميل في "تحميل الكل"
+      var stream = manifest.muxed.where((s) => s.videoQualityLabel.contains("720") || s.videoQualityLabel.contains("480")).firstOrNull ?? manifest.muxed.withHighestBitrate();
       DownloadManager().startDownload(context, stream.url.toString(), "$title.mp4", false);
     } catch (_) {} finally { ytInstance.close(); }
   }
