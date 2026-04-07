@@ -13,6 +13,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:open_file_plus/open_file_plus.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:timezone/data/latest.dart' as tz;
+import 'package:timezone/timezone.dart' as tz;
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 // -----------------------------------------------------------------------------
 // صياد الأخطاء العالمي (Error Hunter System)
@@ -58,6 +62,7 @@ class AppColors {
 void main() async {
   runZonedGuarded(() async {
     WidgetsFlutterBinding.ensureInitialized();
+    await DownloadManager().initNotifications();
     if (Platform.isAndroid) {
       await InAppWebViewController.setWebContentsDebuggingEnabled(true);
     }
@@ -259,6 +264,41 @@ class DownloadManager {
   final Dio _dio = Dio();
   final ValueNotifier<List<ActiveDownload>> activeDownloadsNotifier = ValueNotifier([]);
   VoidCallback? onDownloadComplete;
+  final FlutterLocalNotificationsPlugin _notificationsPlugin = FlutterLocalNotificationsPlugin();
+
+  Future<void> initNotifications() async {
+    const AndroidInitializationSettings initializationSettingsAndroid = AndroidInitializationSettings('@mipmap/ic_launcher');
+    const InitializationSettings initializationSettings = InitializationSettings(android: initializationSettingsAndroid);
+    await _notificationsPlugin.initialize(initializationSettings);
+    tz.initializeTimeZones();
+  }
+
+  void _showNotification(int id, String title, int progress) {
+    AndroidNotificationDetails androidPlatformChannelSpecifics = AndroidNotificationDetails(
+      'download_channel', 'تحميلات R-Plus',
+      channelDescription: 'إشعارات تقدم التحميل',
+      importance: Importance.low,
+      priority: Priority.low,
+      onlyAlertOnce: true,
+      showProgress: true,
+      maxProgress: 100,
+      progress: progress,
+      ongoing: progress < 100,
+    );
+    NotificationDetails platformChannelSpecifics = NotificationDetails(android: androidPlatformChannelSpecifics);
+    _notificationsPlugin.show(id, title, progress < 100 ? 'جاري التحميل: $progress%' : 'اكتمل التحميل بنجاح', platformChannelSpecifics);
+  }
+
+  void scheduleDownload(BuildContext context, String url, String fileName, bool isAudio, DateTime scheduledTime) {
+    final now = DateTime.now();
+    if (scheduledTime.isBefore(now)) return;
+    
+    final duration = scheduledTime.difference(now);
+    Timer(duration, () {
+      startDownload(context, url, fileName, isAudio);
+    });
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("تم جدولة التحميل في: ${scheduledTime.hour}:${scheduledTime.minute}")));
+  }
 
   void clearCompleted() {
     activeDownloadsNotifier.value = activeDownloadsNotifier.value.where((d) => !d.isCompleted && !d.isFailed).toList();
@@ -354,6 +394,9 @@ class DownloadManager {
             dl.downloadedBytes = currentReceived;
             dl.totalBytes = currentTotal;
             dl.size = "${(currentReceived / 1024 / 1024).toStringAsFixed(1)} MB / ${(currentTotal / 1024 / 1024).toStringAsFixed(1)} MB";
+            if ((currentReceived / currentTotal * 100).toInt() % 5 == 0) {
+              _showNotification(url.hashCode, dl.fileName, (dl.progress * 100).toInt());
+            }
           } else {
             dl!.progress = -1.0;
             dl.size = "${((received + start) / 1024 / 1024).toStringAsFixed(1)} MB (جاري...)";
@@ -379,6 +422,7 @@ class DownloadManager {
       dl.isCompleted = true;
       dl.progress = 1.0;
       activeDownloadsNotifier.value = List.from(activeDownloadsNotifier.value);
+      _showNotification(url.hashCode, dl.fileName, 100);
       
       onDownloadComplete?.call(); 
       if (globalDownloadsKey.currentState != null) globalDownloadsKey.currentState!.loadFiles();
@@ -469,6 +513,23 @@ class _HomePageState extends State<HomePage> {
       // التوجه لصفحة المتصفح مع الرابط
       // ملاحظة: هذا يتطلب تعديل بسيط في MainScreen للتنقل
     }
+  }
+
+  void _showRenameDialog(FileSystemEntity f) {
+    final controller = TextEditingController(text: f.path.split('/').last);
+    showDialog(context: context, builder: (ctx) => AlertDialog(
+      title: const Text("إعادة تسمية"),
+      content: TextField(controller: controller),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("إلغاء")),
+        TextButton(onPressed: () async {
+          final newPath = f.path.replaceFirst(f.path.split('/').last, controller.text);
+          await f.rename(newPath);
+          Navigator.pop(ctx);
+          loadFiles();
+        }, child: const Text("حفظ")),
+      ],
+    ));
   }
 
   void _showYoutubeOptions(String title, yt.StreamManifest manifest) {
@@ -577,7 +638,26 @@ class _HomePageState extends State<HomePage> {
           const SizedBox(height: 40),
           TextField(controller: _urlController, decoration: InputDecoration(hintText: "ضع الرابط هنا...", border: OutlineInputBorder(borderRadius: BorderRadius.circular(15)))),
           const SizedBox(height: 20),
-          _isAnalyzing ? const CircularProgressIndicator() : ElevatedButton(onPressed: _analyzeUrl, child: const Text("اصطياد"))
+          _isAnalyzing ? const CircularProgressIndicator() : Column(
+            children: [
+              ElevatedButton(onPressed: _analyzeUrl, child: const Text("اصطياد الآن")),
+              const SizedBox(height: 10),
+              TextButton.icon(
+                onPressed: () async {
+                  final time = await showTimePicker(context: context, initialTime: TimeOfDay.now());
+                  if (time != null) {
+                    final now = DateTime.now();
+                    final scheduled = DateTime(now.year, now.month, now.day, time.hour, time.minute);
+                    if (scheduled.isBefore(now)) scheduled.add(const Duration(days: 1));
+                    final url = _urlController.text.trim();
+                    if (url.isNotEmpty) DownloadManager().scheduleDownload(context, url, "Scheduled_${DateTime.now().millisecond}.mp4", false, scheduled);
+                  }
+                },
+                icon: const Icon(Icons.timer_outlined),
+                label: const Text("جدولة التحميل"),
+              ),
+            ],
+          )
         ]),
       ),
     );
@@ -673,9 +753,11 @@ class _BrowserPageState extends State<BrowserPage> {
         children: [
           if (_progress < 1.0) LinearProgressIndicator(value: _progress, color: AppColors.primary, backgroundColor: AppColors.cardBg, minHeight: 3),
           Expanded(
-            child: InAppWebView(
-              initialUrlRequest: URLRequest(url: WebUri("https://www.google.com")),
-              initialSettings: InAppWebViewSettings(
+            child: Stack(
+              children: [
+                InAppWebView(
+                  initialUrlRequest: URLRequest(url: WebUri("https://www.google.com")),
+                  initialSettings: InAppWebViewSettings(
                 javaScriptEnabled: true,
                 verticalScrollBarEnabled: true,
                 supportMultipleWindows: false, 
@@ -718,6 +800,19 @@ class _BrowserPageState extends State<BrowserPage> {
                 }
                 return null;
               },
+            ),
+            if (_sniffedLinks.isNotEmpty)
+              Positioned(
+                bottom: 20,
+                right: 20,
+                child: FloatingActionButton.extended(
+                  onPressed: _showSniffedLinksSheet,
+                  backgroundColor: AppColors.primary,
+                  icon: const Icon(Icons.download_rounded, color: Colors.white),
+                  label: Text("اصطياد (${_sniffedLinks.length})", style: const TextStyle(color: Colors.white)),
+                ),
+              ),
+              ],
             ),
           ),
         ],
@@ -980,20 +1075,33 @@ class DownloadsPageState extends State<DownloadsPage> {
             );
           },
         ),
-        Expanded(child: _isLoading ? const Center(child: CircularProgressIndicator()) : _files.isEmpty ? _buildEmpty() : ListView.builder(
-          itemCount: _files.length,
-          itemBuilder: (context, i) {
-            final f = _files[i];
-            return Card(margin: const EdgeInsets.symmetric(horizontal: 15, vertical: 5), child: ListTile(
-              leading: const Icon(Icons.movie_rounded, color: AppColors.primary),
-              title: Text(f.path.split('/').last),
-              onTap: () {
-                try { OpenFile.open(f.path); } catch (e) { ErrorHunter.log("Open_File", e); }
-              },
-              trailing: IconButton(icon: const Icon(Icons.delete, color: Colors.red), onPressed: () { f.deleteSync(); loadFiles(); }),
-            ));
-          },
-        ))
+        Expanded(child: _isLoading ? const Center(child: CircularProgressIndicator()) : _files.isEmpty ? _buildEmpty() : ListView.bu	          itemBuilder: (context, i) {
+	            final f = _files[i];
+	            final name = f.path.split('/').last;
+	            return Card(
+	              margin: const EdgeInsets.symmetric(horizontal: 15, vertical: 5),
+	              child: ListTile(
+	                leading: const Icon(Icons.movie_rounded, color: AppColors.primary),
+	                title: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
+	                subtitle: Text("${(f.statSync().size / 1024 / 1024).toStringAsFixed(1)} MB"),
+	                trailing: PopupMenuButton<String>(
+	                  onSelected: (val) async {
+	                    if (val == 'share') Share.shareXFiles([XFile(f.path)]);
+	                    if (val == 'delete') { await f.delete(); loadFiles(); }
+	                    if (val == 'rename') _showRenameDialog(f);
+	                  },
+	                  itemBuilder: (ctx) => [
+	                    const PopupMenuItem(value: 'share', child: Text("مشاركة")),
+	                    const PopupMenuItem(value: 'rename', child: Text("إعادة تسمية")),
+	                    const PopupMenuItem(value: 'delete', child: Text("حذف")),
+	                  ],
+	                ),
+	                onTap: () {
+	                  try { OpenFile.open(f.path); } catch (e) { ErrorHunter.log("Open_File", e); }
+	                },
+	              ),
+	            );
+	          }, ))
       ]),
     );
   }
