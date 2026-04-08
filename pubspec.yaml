@@ -10,7 +10,7 @@ dependencies:
   flutter:
     sdk: flutter
   cupertino_icons: ^1.0.6
-  flutter_inappwebview: ^6.0.0  # تم التعديل هنا لفك التعارض
+  flutter_inappwebview: ^6.1.5
   youtube_explode_dart: ^2.3.0
   http: ^1.2.0
   dio: ^5.4.0
@@ -22,7 +22,7 @@ dependencies:
   url_launcher: ^6.2.5
   flutter_local_notifications: ^17.0.0
   open_file_plus: ^3.3.1
-  share_plus: ^12.0.2  # تم التحديث هنا لأحدث إصدار متوافق
+  share_plus: ^9.0.0
   timezone: ^0.9.2
 
 dev_dependencies:
@@ -32,3 +32,7 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
+# الضربة القاضية لفك التعارض بدون كسر الأندرويد
+dependency_overrides:
+  web: ^1.0.0
