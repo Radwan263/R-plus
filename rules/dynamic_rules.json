@@ -1,0 +1,16 @@
+[
+  {
+    "domainPattern": ".*youtube\\.com.*",
+    "javascriptCode": "console.log('YouTube Scraper Active'); // Add custom YT logic here",
+    "version": 1,
+    "isActive": true,
+    "triggerEvents": ["onLoadStop"]
+  },
+  {
+    "domainPattern": ".*facebook\\.com.*",
+    "javascriptCode": "console.log('Facebook Scraper Active');",
+    "version": 1,
+    "isActive": true,
+    "triggerEvents": ["onLoadStop"]
+  }
+]

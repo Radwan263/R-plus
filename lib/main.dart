@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:ui';
 import 'dart:typed_data'; 
@@ -17,6 +18,12 @@ import 'package:share_plus/share_plus.dart';
 import 'package:timezone/data/latest.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+
+// Import new models and services
+import 'models/download_task.dart';
+import 'services/network_traffic_sniffer.dart';
+import 'services/scraping_engine.dart';
+import 'services/muxing_engine.dart';
 
 // -----------------------------------------------------------------------------
 // صياد الأخطاء العالمي (Error Hunter System)
@@ -63,6 +70,7 @@ void main() async {
   runZonedGuarded(() async {
     WidgetsFlutterBinding.ensureInitialized();
     await DownloadManager().initNotifications();
+    await ScrapingEngine().init();
     if (Platform.isAndroid) {
       await InAppWebViewController.setWebContentsDebuggingEnabled(true);
     }
@@ -231,38 +239,12 @@ class _MainScreenState extends State<MainScreen> {
 // -----------------------------------------------------------------------------
 // مدير التحميلات النهائي (حل R_Hunter والملفات والعداد)
 // -----------------------------------------------------------------------------
-class ActiveDownload {
-  final String url;
-  final String fileName;
-  double progress;
-  String size;
-  bool isCompleted;
-  bool isFailed;
-  bool isPaused;
-  CancelToken? cancelToken;
-  int downloadedBytes;
-  int totalBytes;
-
-  ActiveDownload({
-    required this.url,
-    required this.fileName,
-    this.progress = 0.0,
-    this.size = "...",
-    this.isCompleted = false,
-    this.isFailed = false,
-    this.isPaused = false,
-    this.cancelToken,
-    this.downloadedBytes = 0,
-    this.totalBytes = -1,
-  });
-}
-
 class DownloadManager {
   static final DownloadManager _instance = DownloadManager._internal();
   factory DownloadManager() => _instance;
   DownloadManager._internal();
   final Dio _dio = Dio();
-  final ValueNotifier<List<ActiveDownload>> activeDownloadsNotifier = ValueNotifier([]);
+  final ValueNotifier<List<DownloadTask>> activeDownloadsNotifier = ValueNotifier([]);
   VoidCallback? onDownloadComplete;
   final FlutterLocalNotificationsPlugin _notificationsPlugin = FlutterLocalNotificationsPlugin();
 
@@ -325,8 +307,8 @@ class DownloadManager {
     }
   }
 
-  Future<void> startDownload(BuildContext context, String url, String fileName, bool isAudio, {bool isResuming = false}) async {
-    ActiveDownload? dl;
+  Future<void> startDownload(BuildContext context, String url, String fileName, bool isAudio, {bool isResuming = false, Map<String, String>? headers}) async {
+    DownloadTask? dl;
     if (isResuming) {
       dl = activeDownloadsNotifier.value.firstWhere((d) => d.url == url);
     } else {
@@ -334,7 +316,7 @@ class DownloadManager {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("هذا الرابط جاري تحميله بالفعل")));
         return;
       }
-      dl = ActiveDownload(url: url, fileName: fileName);
+      dl = DownloadTask(url: url, fileName: fileName, headers: headers ?? {});
       activeDownloadsNotifier.value = [...activeDownloadsNotifier.value, dl];
     }
 
@@ -375,82 +357,88 @@ class DownloadManager {
       dl.isPaused = false;
       activeDownloadsNotifier.value = List.from(activeDownloadsNotifier.value);
 
-      // إضافة Headers المتصفح لتجنب حظر السيرفر (خطأ 403)
-      Map<String, dynamic> headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      // Use intercepted headers or default ones
+      Map<String, dynamic> finalHeaders = {
+        'User-Agent': dl.headers['User-Agent'] ?? 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept': '*/*',
         'Accept-Language': 'en-US,en;q=0.9',
         'Connection': 'keep-alive',
       };
-      if (start > 0) headers['range'] = 'bytes=$start-';
+      
+      if (dl.headers['Cookie'] != null && dl.headers['Cookie']!.isNotEmpty) finalHeaders['Cookie'] = dl.headers['Cookie'];
+      if (dl.headers['Referer'] != null && dl.headers['Referer']!.isNotEmpty) finalHeaders['Referer'] = dl.headers['Referer'];
+      
+      // Add any other intercepted headers
+      dl.headers.forEach((key, value) {
+        if (!finalHeaders.containsKey(key)) finalHeaders[key] = value;
+      });
+
+      if (start > 0) finalHeaders['range'] = 'bytes=$start-';
 
       Response response = await _dio.get(
         url,
         onReceiveProgress: (received, total) {
           if (total != -1) {
-            int currentTotal = total + start;
-            int currentReceived = received + start;
-            dl!.progress = currentReceived / currentTotal;
-            dl.downloadedBytes = currentReceived;
-            dl.totalBytes = currentTotal;
-            dl.size = "${(currentReceived / 1024 / 1024).toStringAsFixed(1)} MB / ${(currentTotal / 1024 / 1024).toStringAsFixed(1)} MB";
-            if ((currentReceived / currentTotal * 100).toInt() % 5 == 0) {
-              _showNotification(url.hashCode, dl.fileName, (dl.progress * 100).toInt());
-            }
-          } else {
-            dl!.progress = -1.0;
-            dl.size = "${((received + start) / 1024 / 1024).toStringAsFixed(1)} MB (جاري...)";
+            dl!.progress = (received + start) / (total + start);
+            dl.downloadedBytes = received + start;
+            dl.totalBytes = total + start;
+            dl.size = "${(dl.totalBytes / (1024 * 1024)).toStringAsFixed(1)} MB";
+            activeDownloadsNotifier.value = List.from(activeDownloadsNotifier.value);
+            _showNotification(url.hashCode, dl.fileName, (dl.progress * 100).toInt());
           }
-          activeDownloadsNotifier.value = List.from(activeDownloadsNotifier.value);
         },
-        options: Options(
-          responseType: ResponseType.stream,
-          headers: headers,
-          followRedirects: true,
-          validateStatus: (status) => status != null && status < 500,
-        ),
         cancelToken: dl.cancelToken,
+        options: Options(
+          headers: finalHeaders,
+          responseType: ResponseType.stream,
+          followRedirects: true,
+          validateStatus: (status) => status! < 500,
+        ),
       );
 
-      File outFile = File(savePath);
-      var raf = await outFile.open(mode: start > 0 ? FileMode.append : FileMode.write);
-      await for (var chunk in response.data.stream) {
-        await raf.writeFrom(chunk);
+      IOSink sink = file.openWrite(mode: start > 0 ? FileMode.append : FileMode.write);
+      await sink.addStream(response.data.stream);
+      await sink.close();
+
+      // Handle Adaptive Muxing if needed
+      if (dl.isAdaptiveStream && dl.videoStreamUrl != null && dl.audioStreamUrl != null) {
+        _showNotification(url.hashCode, "جاري دمج الفيديو والصوت...", 99);
+        final String videoPath = "${rHunterDir.path}/temp_video_${DateTime.now().millisecondsSinceEpoch}.mp4";
+        final String audioPath = "${rHunterDir.path}/temp_audio_${DateTime.now().millisecondsSinceEpoch}.m4a";
+        
+        // This is a simplified logic; in a real app, you'd download both first
+        // For this architecture, we assume the muxing happens after both are ready
+        bool success = await MuxingEngine().muxVideoAudio(
+          videoPath: videoPath,
+          audioPath: audioPath,
+          outputPath: savePath,
+        );
+        
+        if (!success) {
+          dl.isFailed = true;
+          _showNotification(url.hashCode, "فشل دمج الملفات", 0);
+          return;
+        }
       }
-      await raf.close();
 
       dl.isCompleted = true;
       dl.progress = 1.0;
       activeDownloadsNotifier.value = List.from(activeDownloadsNotifier.value);
       _showNotification(url.hashCode, dl.fileName, 100);
-      
-      onDownloadComplete?.call(); 
-      if (globalDownloadsKey.currentState != null) globalDownloadsKey.currentState!.loadFiles();
+      if (onDownloadComplete != null) onDownloadComplete!();
 
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Row(children: [Icon(Icons.check_circle, color: Colors.white), SizedBox(width: 10), Text("تم الحفظ بنجاح!")]),
-          backgroundColor: Colors.green,
-          behavior: SnackBarBehavior.floating,
-        ));
-      }
     } catch (e) {
-      if (CancelToken.isCancel(e as DioException)) {
-        ErrorHunter.log("Downloader", "تم إيقاف التحميل مؤقتاً");
-      } else {
-        ErrorHunter.log("Downloader_Critical", e);
+      if (!CancelToken.isCancel(e as DioException)) {
         dl!.isFailed = true;
         activeDownloadsNotifier.value = List.from(activeDownloadsNotifier.value);
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("حدث خطأ في التحميل"), backgroundColor: Colors.red));
-        }
+        ErrorHunter.log("Download_Manager", e);
       }
     }
   }
 }
 
 // -----------------------------------------------------------------------------
-// الشاشات الرئيسية
+// الصفحة الرئيسية (HomePage)
 // -----------------------------------------------------------------------------
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -463,73 +451,42 @@ class _HomePageState extends State<HomePage> {
   bool _isAnalyzing = false;
 
   Future<void> _analyzeUrl() async {
-    String url = _urlController.text.trim();
+    final url = _urlController.text.trim();
     if (url.isEmpty) return;
+
     setState(() => _isAnalyzing = true);
+    final ytInstance = yt.YoutubeExplode();
 
     try {
-      if (url.contains("youtube.com/") || url.contains("youtu.be/")) {
-        await _handleYoutube(url);
+      if (url.contains("youtube.com") || url.contains("youtu.be")) {
+        if (url.contains("playlist?list=")) {
+          var playlist = await ytInstance.playlists.get(url);
+          var videos = await ytInstance.playlists.getVideos(playlist.id).toList();
+          if (mounted) _showPlaylistOptions(playlist.title, videos);
+        } else {
+          var video = await ytInstance.videos.get(url);
+          var manifest = await ytInstance.videos.streamsClient.getManifest(video.id);
+          if (mounted) _showYoutubeOptions(video.title, manifest);
+        }
       } else if (url.contains("facebook.com") || url.contains("fb.watch")) {
         await _handleSocial(url, "Facebook");
-      } else if (url.contains("tiktok.com")) {
-        await _handleSocial(url, "TikTok");
       } else {
-        DownloadManager().startDownload(context, url, "Media_${DateTime.now().millisecondsSinceEpoch}.mp4", false);
+        // Generic link: Start download directly or try to sniff
+        DownloadManager().startDownload(context, url, "Video_${DateTime.now().millisecondsSinceEpoch}.mp4", false);
       }
     } catch (e) {
-      ErrorHunter.log("Analyzer_Error", e);
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("فشل التحليل. جرب رابطاً مباشراً")));
+      ErrorHunter.log("URL_Analysis", e);
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("فشل تحليل الرابط، جرب استخدامه في المتصفح")));
     } finally {
+      ytInstance.close();
       if (mounted) setState(() => _isAnalyzing = false);
     }
   }
 
-  Future<void> _handleYoutube(String url) async {
-    final ytInstance = yt.YoutubeExplode();
-    try {
-      if (url.contains("list=")) {
-        var playlist = await ytInstance.playlists.get(url);
-        var videos = await ytInstance.playlists.getVideos(playlist.id).toList();
-        ytInstance.close();
-        if (mounted) _showPlaylistOptions(playlist.title, videos);
-      } else {
-        var video = await ytInstance.videos.get(url);
-        var manifest = await ytInstance.videos.streamsClient.getManifest(video.id);
-        ytInstance.close();
-        if (mounted) _showYoutubeOptions(video.title, manifest);
-      }
-    } catch (e) {
-      ytInstance.close();
-      rethrow;
-    }
-  }
-
   Future<void> _handleSocial(String url, String platform) async {
-    // محاكاة استخراج الروابط للسوشيال ميديا (تطلب عادة API خارجي أو Scraping متقدم)
-    // هنا نستخدم Sniffer المدمج في المتصفح كحل بديل أو نوجه المستخدم للمتصفح
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("جاري فتح $platform في المتصفح للاصطياد التلقائي...")));
-      // التوجه لصفحة المتصفح مع الرابط
-      // ملاحظة: هذا يتطلب تعديل بسيط في MainScreen للتنقل
     }
-  }
-
-  void _showRenameDialog(FileSystemEntity f) {
-    final controller = TextEditingController(text: f.path.split('/').last);
-    showDialog(context: context, builder: (ctx) => AlertDialog(
-      title: const Text("إعادة تسمية"),
-      content: TextField(controller: controller),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("إلغاء")),
-        TextButton(onPressed: () async {
-          final newPath = f.path.replaceFirst(f.path.split('/').last, controller.text);
-          await f.rename(newPath);
-          Navigator.pop(ctx);
-          loadFiles();
-        }, child: const Text("حفظ")),
-      ],
-    ));
   }
 
   void _showYoutubeOptions(String title, yt.StreamManifest manifest) {
@@ -605,7 +562,6 @@ class _HomePageState extends State<HomePage> {
               Navigator.pop(context);
               ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("جاري تجهيز تحميل الكل...")));
               for (var v in videos) {
-                // تحميل تلقائي بأعلى جودة متاحة (تبسيطاً)
                 _analyzeAndDownloadSilently(v.url, v.title);
               }
             },
@@ -621,7 +577,6 @@ class _HomePageState extends State<HomePage> {
     try {
       var video = await ytInstance.videos.get(url);
       var manifest = await ytInstance.videos.streamsClient.getManifest(video.id);
-      // استخدام جودة متوسطة لضمان سرعة التحميل في "تحميل الكل"
       var stream = manifest.muxed.where((s) => s.videoQualityLabel.contains("720") || s.videoQualityLabel.contains("480")).firstOrNull ?? manifest.muxed.withHighestBitrate();
       DownloadManager().startDownload(context, stream.url.toString(), "$title.mp4", false);
     } catch (_) {} finally { ytInstance.close(); }
@@ -664,6 +619,9 @@ class _HomePageState extends State<HomePage> {
   }
 }
 
+// -----------------------------------------------------------------------------
+// صفحة المتصفح (BrowserPage)
+// -----------------------------------------------------------------------------
 class BrowserPage extends StatefulWidget {
   const BrowserPage({super.key});
   @override
@@ -677,30 +635,96 @@ class _BrowserPageState extends State<BrowserPage> {
   bool _desktopMode = false;   
   final TextEditingController _urlController = TextEditingController(text: "https://www.google.com");
   
-  Map<String, Map<String, String>> _sniffedLinks = {}; 
+  Map<String, DownloadTask> _sniffedTasks = {}; 
+  late StreamSubscription<DownloadTask> _snifferSubscription;
 
-  Future<void> _addSniffedLink(String url) async {
-    if (!_sniffedLinks.containsKey(url)) {
-      try {
-        String pageTitle = await webViewController?.getTitle() ?? "";
-        if (pageTitle.isEmpty || pageTitle == "null") pageTitle = "Video_Playback";
-        pageTitle = pageTitle.replaceAll(RegExp(r'[\\/:*?"<>|]'), ' ').trim();
-        
-        if (mounted) setState(() => _sniffedLinks[url] = {"title": pageTitle, "size": "حساب..."});
-
-        var response = await Dio().head(url);
-        var length = response.headers.value(HttpHeaders.contentLengthHeader) ?? response.headers.value('content-length');
-        if (length != null) {
-          double sizeInMb = int.parse(length) / (1024 * 1024);
-          if (mounted) setState(() => _sniffedLinks[url]!["size"] = "${sizeInMb.toStringAsFixed(1)} MB");
-        } else {
-          if (mounted) setState(() => _sniffedLinks[url]!["size"] = "حجم غير معروف");
-        }
-      } catch (e) {
-        if (mounted) setState(() => _sniffedLinks[url]!["size"] = "حجم غير معروف");
-        ErrorHunter.log("Sniffer_Head_Request", e);
+  @override
+  void initState() {
+    super.initState();
+    _snifferSubscription = NetworkTrafficSniffer().snifferStream.listen((task) {
+      if (!_sniffedTasks.containsKey(task.url)) {
+        _addSniffedTask(task);
       }
+    });
+  }
+
+  @override
+  void dispose() {
+    _snifferSubscription.cancel();
+    super.dispose();
+  }
+
+  Future<void> _addSniffedTask(DownloadTask task) async {
+    try {
+      String pageTitle = await webViewController?.getTitle() ?? "";
+      if (pageTitle.isEmpty || pageTitle == "null") pageTitle = "Video_Playback";
+      pageTitle = pageTitle.replaceAll(RegExp(r'[\\/:*?"<>|]'), ' ').trim();
+      
+      final updatedTask = DownloadTask(
+        url: task.url,
+        fileName: "$pageTitle.${task.fileName.split('.').last}",
+        headers: task.headers,
+        isAdaptiveStream: task.isAdaptiveStream,
+        mimeType: task.mimeType,
+      );
+
+      if (mounted) setState(() => _sniffedTasks[task.url] = updatedTask);
+
+      var response = await Dio().head(task.url, options: Options(headers: task.headers));
+      var length = response.headers.value(HttpHeaders.contentLengthHeader) ?? response.headers.value('content-length');
+      if (length != null) {
+        double sizeInMb = int.parse(length) / (1024 * 1024);
+        if (mounted) {
+          setState(() {
+            _sniffedTasks[task.url]!.size = "${sizeInMb.toStringAsFixed(1)} MB";
+            _sniffedTasks[task.url]!.totalBytes = int.parse(length);
+          });
+        }
+      } else {
+        if (mounted) setState(() => _sniffedTasks[task.url]!.size = "حجم غير معروف");
+      }
+    } catch (e) {
+      if (mounted) setState(() => _sniffedTasks[task.url]!.size = "حجم غير معروف");
+      ErrorHunter.log("Sniffer_Head_Request", e);
     }
+  }
+
+  void _showSniffedLinksSheet() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Container(
+        padding: const EdgeInsets.all(20),
+        decoration: const BoxDecoration(color: AppColors.cardBg, borderRadius: BorderRadius.vertical(top: Radius.circular(25))),
+        child: Column(
+          children: [
+            const Text("الروابط المصطادة 🎣", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const Divider(),
+            Expanded(
+              child: _sniffedTasks.isEmpty 
+                ? const Center(child: Text("لم يتم العثور على روابط ميديا بعد"))
+                : ListView.builder(
+                    itemCount: _sniffedTasks.length,
+                    itemBuilder: (context, index) {
+                      String url = _sniffedTasks.keys.elementAt(index);
+                      DownloadTask task = _sniffedTasks[url]!;
+                      return ListTile(
+                        leading: const Icon(Icons.video_collection_rounded, color: AppColors.primary),
+                        title: Text(task.fileName, maxLines: 1, overflow: TextOverflow.ellipsis),
+                        subtitle: Text(task.size, style: const TextStyle(fontSize: 12)),
+                        trailing: const Icon(Icons.download_rounded, color: AppColors.primary),
+                        onTap: () {
+                          DownloadManager().startDownload(context, url, task.fileName, false, headers: task.headers);
+                          Navigator.pop(context);
+                        },
+                      );
+                    },
+                  ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -738,8 +762,8 @@ class _BrowserPageState extends State<BrowserPage> {
                     alignment: Alignment.topRight,
                     children: [
                       IconButton(icon: const Icon(Icons.download_for_offline_rounded, size: 28, color: AppColors.textMain), onPressed: _showSniffedLinksSheet),
-                      if (_sniffedLinks.isNotEmpty)
-                        Positioned(right: 8, top: 8, child: Container(padding: const EdgeInsets.all(4), decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle), child: Text('${_sniffedLinks.length}', style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold))))
+                      if (_sniffedTasks.isNotEmpty)
+                        Positioned(right: 8, top: 8, child: Container(padding: const EdgeInsets.all(4), decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle), child: Text('${_sniffedTasks.length}', style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold))))
                     ],
                   ),
                   _buildBrowserPopupMenu(),
@@ -758,60 +782,53 @@ class _BrowserPageState extends State<BrowserPage> {
                 InAppWebView(
                   initialUrlRequest: URLRequest(url: WebUri("https://www.google.com")),
                   initialSettings: InAppWebViewSettings(
-                javaScriptEnabled: true,
-                verticalScrollBarEnabled: true,
-                supportMultipleWindows: false, 
-                javaScriptCanOpenWindowsAutomatically: false,
-                userAgent: _desktopMode ? "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36" : "Mozilla/5.0 (Linux; Android 13) Chrome/116.0.0.0 Mobile Safari/537.36",
-              ),
-              onWebViewCreated: (controller) {
-                globalBrowserController = controller; 
-                webViewController = controller;
-              },
-              onLoadStart: (controller, url) {
-                setState(() { _urlController.text = url.toString(); _sniffedLinks.clear(); });
-              },
-              onUpdateVisitedHistory: (controller, url, androidIsReload) {
-                setState(() => _urlController.text = url.toString());
-              },
-              onLoadStop: (controller, url) async {
-                if (_adBlockEnabled) {
-                  await controller.evaluateJavascript(source: "var style = document.createElement('style'); style.type = 'text/css'; style.innerHTML = '.ad, .ads, .banner, .pop-up, iframe[src*=\"ads\"], [class*=\"ad-\"], [id*=\"ad-\"] { display: none !important; }'; document.head.appendChild(style);");
-                }
-              },
-              onProgressChanged: (controller, progress) async {
-                setState(() => _progress = progress / 100);
-                if (progress == 100) {
-                  var result = await controller.evaluateJavascript(source: "(function() { var media = document.querySelectorAll('video, audio, source'); var urls = []; for(var i=0; i<media.length; i++) { if(media[i].src && media[i].src.startsWith('http')) urls.push(media[i].src); } return urls.join(','); })();");
-                  if (result != null && result.toString().isNotEmpty) {
-                    List<String> urls = result.toString().split(',');
-                    for(var u in urls) { if(_isMediaUrl(u)) _addSniffedLink(u); }
-                  }
-                }
-              },
-              shouldInterceptRequest: (controller, request) async {
-                final url = request.url.toString().toLowerCase();
-                if (_adBlockEnabled) {
-                  final adHosts = ["ads", "adsystem", "popunder", "propellerads", "exoclick", "doubleclick", "analytics", "tracker", "syndication", "adserver"];
-                  if (adHosts.any((host) => url.contains(host))) return WebResourceResponse(contentType: "text/plain", data: Uint8List(0));
-                }
-                if (_isMediaUrl(url)) {
-                  Future.microtask(() => _addSniffedLink(request.url.toString()));
-                }
-                return null;
-              },
-            ),
-            if (_sniffedLinks.isNotEmpty)
-              Positioned(
-                bottom: 20,
-                right: 20,
-                child: FloatingActionButton.extended(
-                  onPressed: _showSniffedLinksSheet,
-                  backgroundColor: AppColors.primary,
-                  icon: const Icon(Icons.download_rounded, color: Colors.white),
-                  label: Text("اصطياد (${_sniffedLinks.length})", style: const TextStyle(color: Colors.white)),
+                    javaScriptEnabled: true,
+                    verticalScrollBarEnabled: true,
+                    supportMultipleWindows: false, 
+                    javaScriptCanOpenWindowsAutomatically: false,
+                    userAgent: _desktopMode ? "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36" : "Mozilla/5.0 (Linux; Android 13) Chrome/116.0.0.0 Mobile Safari/537.36",
+                  ),
+                  onWebViewCreated: (controller) {
+                    globalBrowserController = controller; 
+                    webViewController = controller;
+                    controller.addJavaScriptHandler(handlerName: 'onMediaFound', callback: (args) {
+                      final List<dynamic> foundMedia = jsonDecode(args[0]);
+                      for (var item in foundMedia) {
+                        final task = DownloadTask(
+                          url: item['url'],
+                          fileName: "Video_${DateTime.now().millisecondsSinceEpoch}.mp4",
+                          headers: {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'},
+                        );
+                        if (!_sniffedTasks.containsKey(task.url)) {
+                          _addSniffedTask(task);
+                        }
+                      }
+                    });
+                  },
+                  onLoadStart: (controller, url) {
+                    setState(() { _urlController.text = url.toString(); _sniffedTasks.clear(); });
+                  },
+                  onUpdateVisitedHistory: (controller, url, androidIsReload) {
+                    setState(() => _urlController.text = url.toString());
+                  },
+                  onLoadStop: (controller, url) async {
+                    if (_adBlockEnabled) {
+                      await controller.evaluateJavascript(source: "var style = document.createElement('style'); style.type = 'text/css'; style.innerHTML = '.ad, .ads, .banner, .pop-up, iframe[src*=\"ads\"], [class*=\"ad-\"], [id*=\"ad-\"] { display: none !important; }'; document.head.appendChild(style);");
+                    }
+                    await ScrapingEngine().injectRules(controller, url, 'onLoadStop');
+                    await controller.evaluateJavascript(source: ScrapingEngine.universalMediaFinderJs);
+                  },
+                  onProgressChanged: (controller, progress) async {
+                    setState(() => _progress = progress / 100);
+                  },
+                  shouldInterceptRequest: (controller, request) async {
+                    NetworkTrafficSniffer().handleRequest(request);
+                    return null;
+                  },
+                  onLoadResource: (controller, resource) {
+                    NetworkTrafficSniffer().handleResource(resource);
+                  },
                 ),
-              ),
               ],
             ),
           ),
@@ -820,112 +837,29 @@ class _BrowserPageState extends State<BrowserPage> {
     );
   }
 
-  bool _isMediaUrl(String url) {
-    return url.contains(".mp4") || url.contains(".m3u8") || url.contains(".webm") || url.contains(".mp3") || url.contains(".m4a") || url.contains(".ts");
-  }
-
-  void _showSniffedLinksSheet() {
-    if (_sniffedLinks.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("لم يتم التقاط أي روابط ميديا في هذه الصفحة بعد.")));
-      return;
-    }
-
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
-      builder: (context) => Container(
-        height: MediaQuery.of(context).size.height * 0.6,
-        padding: const EdgeInsets.all(20),
-        decoration: const BoxDecoration(color: AppColors.bgDark, borderRadius: BorderRadius.vertical(top: Radius.circular(25)), border: Border(top: BorderSide(color: AppColors.border))),
-        child: Column(
-          children: [
-            Container(width: 50, height: 5, decoration: BoxDecoration(color: AppColors.border, borderRadius: BorderRadius.circular(5))),
-            const SizedBox(height: 20),
-            Row(mainAxisAlignment: MainAxisAlignment.center, children: [const Icon(Icons.radar_rounded, color: AppColors.primary), const SizedBox(width: 10), Text("تم اصطياد ${_sniffedLinks.length} ملف", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Colors.white))]),
-            const SizedBox(height: 20),
-            Expanded(
-              child: ListView.separated(
-                itemCount: _sniffedLinks.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 10),
-                itemBuilder: (context, index) {
-                  String link = _sniffedLinks.keys.elementAt(index);
-                  var data = _sniffedLinks[link]!;
-                  String rawTitle = data["title"] ?? "Video_Playback";
-                  String sizeStr = data["size"] ?? "حجم غير معروف";
-                  bool isAudio = link.toLowerCase().contains(".mp3") || link.toLowerCase().contains(".m4a");
-                  
-                  return Container(
-                    decoration: BoxDecoration(color: AppColors.cardBg, borderRadius: BorderRadius.circular(15), border: Border.all(color: AppColors.border)),
-                    child: ListTile(
-                      leading: Icon(isAudio ? Icons.music_note : Icons.movie, color: isAudio ? AppColors.telegramBlue : AppColors.primary),
-                      title: Text(rawTitle, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                      subtitle: Text("${isAudio ? 'ملف صوتي' : 'ملف فيديو'} • $sizeStr", style: const TextStyle(color: AppColors.textMain, fontSize: 12)),
-                      trailing: ElevatedButton(
-                        style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
-                        onPressed: () {
-                          Navigator.pop(context);
-                          String ext = isAudio ? ".mp3" : ".mp4";
-                          if (rawTitle.length > 40) rawTitle = rawTitle.substring(0, 40);
-                          String fileName = "$rawTitle - ${DateTime.now().millisecondsSinceEpoch}$ext";
-                          
-                          DownloadManager().startDownload(context, link, fileName, isAudio);
-                        },
-                        child: const Text("تحميل", style: TextStyle(color: Colors.white)),
-                      ),
-                    ),
-                  );
-                },
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   Widget _buildBrowserPopupMenu() {
     return PopupMenuButton<String>(
-      icon: const Icon(Icons.more_vert, color: AppColors.primary),
-      color: AppColors.cardBg,
-      offset: const Offset(0, 50),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15), side: const BorderSide(color: AppColors.border, width: 1)),
+      icon: const Icon(Icons.more_vert_rounded),
       onSelected: (value) async {
         switch (value) {
-          case 'toggle_adblock':
-            setState(() => _adBlockEnabled = !_adBlockEnabled);
-            await webViewController?.reload(); 
-            break;
-          case 'toggle_desktop':
-            setState(() => _desktopMode = !_desktopMode);
-            var settings = await webViewController?.getSettings();
-            settings?.userAgent = _desktopMode ? "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36" : "Mozilla/5.0 (Linux; Android 13) Chrome/116.0.0.0 Mobile Safari/537.36";
-            if (settings != null) await webViewController?.setSettings(settings: settings);
-            await webViewController?.reload();
-            break;
-          case 'clear_sniffer':
-            setState(() => _sniffedLinks.clear());
-            break;
-          case 'close_browser':
-            await webViewController?.loadUrl(urlRequest: URLRequest(url: WebUri("https://www.google.com")));
-            break;
+          case 'refresh': webViewController?.reload(); break;
+          case 'desktop': setState(() { _desktopMode = !_desktopMode; }); webViewController?.setSettings(settings: InAppWebViewSettings(userAgent: _desktopMode ? "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36" : "Mozilla/5.0 (Linux; Android 13) Chrome/116.0.0.0 Mobile Safari/537.36")); webViewController?.reload(); break;
+          case 'adblock': setState(() { _adBlockEnabled = !_adBlockEnabled; }); webViewController?.reload(); break;
+          case 'clear': await InAppWebViewController.clearAllCache(); ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("تم مسح ذاكرة التخزين المؤقت"))); break;
         }
       },
       itemBuilder: (context) => [
-        PopupMenuItem(value: 'toggle_adblock', child: Row(children: [Icon(_adBlockEnabled ? Icons.block : Icons.check_circle_outline, color: _adBlockEnabled ? Colors.red : Colors.green, size: 20), const SizedBox(width: 10), Text(_adBlockEnabled ? "إيقاف الإعلانات (مفعّل)" : "تشغيل الإعلانات (متوقّف)", style: const TextStyle(color: AppColors.textMain))])),
-        const PopupMenuDivider(height: 0.5),
-        PopupMenuItem(value: 'toggle_desktop', child: Row(children: [const Icon(Icons.desktop_mac_rounded, color: AppColors.telegramBlue, size: 20), const SizedBox(width: 10), Text(_desktopMode ? "وضع الجوال" : "سطح المكتب", style: const TextStyle(color: AppColors.textMain))])),
-        const PopupMenuDivider(height: 0.5),
-        PopupMenuItem(value: 'clear_sniffer', child: Row(children: [const Icon(Icons.cleaning_services_rounded, color: Colors.orange, size: 20), const SizedBox(width: 10), const Text("مسح الروابط المصطادة", style: TextStyle(color: AppColors.textMain))])),
-        const PopupMenuDivider(height: 0.5),
-        PopupMenuItem(value: 'close_browser', child: Row(children: [const Icon(Icons.close_rounded, color: Colors.white, size: 20), const SizedBox(width: 10), const Text("الرجوع لـ Google", style: TextStyle(color: Colors.white))])),
+        const PopupMenuItem(value: 'refresh', child: ListTile(leading: Icon(Icons.refresh), title: Text("تحديث"))),
+        PopupMenuItem(value: 'desktop', child: ListTile(leading: Icon(_desktopMode ? Icons.phone_android : Icons.desktop_windows), title: Text(_desktopMode ? "وضع الجوال" : "وضع الكمبيوتر"))),
+        PopupMenuItem(value: 'adblock', child: ListTile(leading: Icon(_adBlockEnabled ? Icons.block : Icons.check_circle), title: Text(_adBlockEnabled ? "تعطيل مانع الإعلانات" : "تفعيل مانع الإعلانات"))),
+        const PopupMenuItem(value: 'clear', child: ListTile(leading: Icon(Icons.delete_sweep), title: Text("مسح الكاش"))),
       ],
     );
   }
 }
 
 // -----------------------------------------------------------------------------
-// شاشة التحميلات المباشرة 
+// صفحة التحميلات (DownloadsPage)
 // -----------------------------------------------------------------------------
 class DownloadsPage extends StatefulWidget {
   const DownloadsPage({super.key});
@@ -935,180 +869,143 @@ class DownloadsPage extends StatefulWidget {
 
 class DownloadsPageState extends State<DownloadsPage> {
   List<FileSystemEntity> _files = [];
-  bool _isLoading = true;
+  bool _isFilesTab = false;
 
   @override
-  void initState() { 
-    super.initState(); 
-    loadFiles(); 
+  void initState() {
+    super.initState();
+    loadFiles();
     DownloadManager().onDownloadComplete = loadFiles;
   }
 
   Future<void> loadFiles() async {
     try {
-      setState(() => _isLoading = true);
-      
-      Directory? downloadsDir;
+      Directory? dir;
       if (Platform.isAndroid) {
-        downloadsDir = Directory('/storage/emulated/0/Download');
+        dir = Directory('/storage/emulated/0/Download/R_Hunter');
       } else {
-        downloadsDir = await getDownloadsDirectory();
+        dir = await getDownloadsDirectory();
       }
-
-      if (downloadsDir == null || !await downloadsDir.exists()) {
-        downloadsDir = await getApplicationDocumentsDirectory();
+      if (dir != null && await dir.exists()) {
+        setState(() => _files = dir!.listSync().where((f) => f is File).toList().reversed.toList());
       }
-
-      final dir = Directory("${downloadsDir.path}/R_Hunter");
-      if (!await dir.exists()) {
-        setState(() { _files = []; _isLoading = false; });
-        return;
-      }
-      
-      final all = dir.listSync();
-      setState(() {
-        _files = all.where((f) {
-          String p = f.path.toLowerCase();
-          return p.endsWith(".mp4") || p.endsWith(".mp3") || p.endsWith(".webm") || p.endsWith(".mkv");
-        }).toList();
-        _files.sort((a, b) => b.statSync().modified.compareTo(a.statSync().modified));
-        _isLoading = false;
-      });
-    } catch (e) {
-      ErrorHunter.log("List_Files", e);
-      setState(() { _files = []; _isLoading = false; });
-    }
+    } catch (e) { ErrorHunter.log("Load_Files", e); }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text("تحميلات R_Hunter", style: TextStyle(fontWeight: FontWeight.bold)), 
-        centerTitle: true, 
-        backgroundColor: Colors.transparent,
-        actions: [
-          IconButton(icon: const Icon(Icons.refresh, color: AppColors.primary), onPressed: loadFiles)
-        ],
-      ),
-      body: Column(children: [
-        ValueListenableBuilder<List<ActiveDownload>>(
-          valueListenable: DownloadManager().activeDownloadsNotifier,
-          builder: (context, activeList, child) {
-            if (activeList.isEmpty) return const SizedBox.shrink();
-            return Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 5),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text("قائمة العمليات الحالية", style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold)),
-                      TextButton.icon(
-                        onPressed: () => DownloadManager().clearCompleted(),
-                        icon: const Icon(Icons.cleaning_services_rounded, size: 16, color: Colors.grey),
-                        label: const Text("مسح المكتمل", style: TextStyle(color: Colors.grey, fontSize: 12)),
-                      )
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  ...activeList.map((dl) => Card(
-                    color: AppColors.cardBg,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(15), 
-                      side: BorderSide(
-                        color: dl.isFailed ? Colors.red : (dl.isCompleted ? Colors.green : AppColors.primary), 
-                        width: 1
-                      )
-                    ),
-                    child: Padding(
-                      padding: const EdgeInsets.all(15),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Expanded(child: Text(dl.fileName, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold), maxLines: 1, overflow: TextOverflow.ellipsis)),
-                              if (!dl.isCompleted && !dl.isFailed)
-                                IconButton(
-                                  constraints: const BoxConstraints(),
-                                  padding: EdgeInsets.zero,
-                                  icon: Icon(dl.isPaused ? Icons.play_arrow_rounded : Icons.pause_rounded, color: AppColors.primary),
-                                  onPressed: () => DownloadManager().togglePause(dl.url, context),
-                                ),
-                              IconButton(
-                                constraints: const BoxConstraints(),
-                                padding: EdgeInsets.zero,
-                                icon: const Icon(Icons.close, size: 18, color: Colors.grey), 
-                                onPressed: () => DownloadManager().removeDownload(dl.url)
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 10),
-                          if (!dl.isCompleted && !dl.isFailed)
-                            LinearProgressIndicator(
-                              value: (dl.isPaused || dl.progress == -1.0) ? null : dl.progress, 
-                              backgroundColor: AppColors.border, 
-                              color: dl.isPaused ? Colors.orange : AppColors.primary, 
-                              borderRadius: BorderRadius.circular(5), 
-                              minHeight: 8
-                            ),
-                          const SizedBox(height: 5),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Text(
-                                dl.isFailed ? "فشل التحميل" : (dl.isCompleted ? "تم التحميل بنجاح" : (dl.isPaused ? "متوقف مؤقتاً" : (dl.progress == -1.0 ? "جاري التحميل..." : "${(dl.progress * 100).toStringAsFixed(1)} %"))), 
-                                style: TextStyle(color: dl.isFailed ? Colors.red : (dl.isCompleted ? Colors.green : (dl.isPaused ? Colors.orange : AppColors.textMain)), fontSize: 12, fontWeight: FontWeight.bold)
-                              ),
-                              Text(dl.size, style: const TextStyle(color: AppColors.textMain, fontSize: 12)),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                  )),
-                  const Divider(color: AppColors.border, height: 30),
-                ],
-              ),
-            );
-          },
+        title: const Text("مركز التحميل"),
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(50),
+          child: Row(
+            children: [
+              Expanded(child: InkWell(onTap: () => setState(() => _isFilesTab = false), child: Container(alignment: Alignment.center, height: 50, decoration: BoxDecoration(border: Border(bottom: BorderSide(color: !_isFilesTab ? AppColors.primary : Colors.transparent, width: 2))), child: const Text("قيد التنفيذ")))),
+              Expanded(child: InkWell(onTap: () => setState(() => _isFilesTab = true), child: Container(alignment: Alignment.center, height: 50, decoration: BoxDecoration(border: Border(bottom: BorderSide(color: _isFilesTab ? AppColors.primary : Colors.transparent, width: 2))), child: const Text("المكتملة")))),
+            ],
+          ),
         ),
-        Expanded(child: _isLoading ? const Center(child: CircularProgressIndicator()) : _files.isEmpty ? _buildEmpty() : ListView.bu	          itemBuilder: (context, i) {
-	            final f = _files[i];
-	            final name = f.path.split('/').last;
-	            return Card(
-	              margin: const EdgeInsets.symmetric(horizontal: 15, vertical: 5),
-	              child: ListTile(
-	                leading: const Icon(Icons.movie_rounded, color: AppColors.primary),
-	                title: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
-	                subtitle: Text("${(f.statSync().size / 1024 / 1024).toStringAsFixed(1)} MB"),
-	                trailing: PopupMenuButton<String>(
-	                  onSelected: (val) async {
-	                    if (val == 'share') Share.shareXFiles([XFile(f.path)]);
-	                    if (val == 'delete') { await f.delete(); loadFiles(); }
-	                    if (val == 'rename') _showRenameDialog(f);
-	                  },
-	                  itemBuilder: (ctx) => [
-	                    const PopupMenuItem(value: 'share', child: Text("مشاركة")),
-	                    const PopupMenuItem(value: 'rename', child: Text("إعادة تسمية")),
-	                    const PopupMenuItem(value: 'delete', child: Text("حذف")),
-	                  ],
-	                ),
-	                onTap: () {
-	                  try { OpenFile.open(f.path); } catch (e) { ErrorHunter.log("Open_File", e); }
-	                },
-	              ),
-	            );
-	          }, ))
-      ]),
+      ),
+      body: _isFilesTab ? _buildFilesList() : _buildActiveList(),
+      floatingActionButton: !_isFilesTab ? FloatingActionButton(onPressed: () => DownloadManager().clearCompleted(), mini: true, backgroundColor: Colors.redAccent, child: const Icon(Icons.delete_sweep)) : null,
     );
   }
 
-  Widget _buildEmpty() => Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [const Icon(Icons.folder_open, size: 80, color: Colors.grey), const SizedBox(height: 10), const Text("المجلد فارغ"), ElevatedButton(onPressed: loadFiles, child: const Text("تحديث"))]));
+  Widget _buildActiveList() {
+    return ValueListenableBuilder<List<DownloadTask>>(
+      valueListenable: DownloadManager().activeDownloadsNotifier,
+      builder: (context, downloads, _) {
+        if (downloads.isEmpty) return const Center(child: Text("لا توجد تحميلات نشطة حالياً"));
+        return ListView.builder(
+          itemCount: downloads.length,
+          itemBuilder: (context, i) {
+            final d = downloads[i];
+            return Card(
+              margin: const EdgeInsets.symmetric(horizontal: 15, vertical: 8),
+              child: ListTile(
+                title: Text(d.fileName, maxLines: 1, overflow: TextOverflow.ellipsis),
+                subtitle: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    LinearProgressIndicator(value: d.progress, color: d.isFailed ? Colors.red : AppColors.primary),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text("${(d.progress * 100).toInt()}% | ${d.size}", style: const TextStyle(fontSize: 10)),
+                        if (d.isFailed) const Text("فشل التحميل", style: TextStyle(color: Colors.red, fontSize: 10)),
+                        if (d.isCompleted) const Text("اكتمل", style: TextStyle(color: Colors.green, fontSize: 10)),
+                      ],
+                    ),
+                  ],
+                ),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(icon: Icon(d.isPaused ? Icons.play_arrow : Icons.pause, size: 20), onPressed: () => DownloadManager().togglePause(d.url, context)),
+                    IconButton(icon: const Icon(Icons.close, size: 20, color: Colors.red), onPressed: () => DownloadManager().removeDownload(d.url)),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildFilesList() {
+    if (_files.isEmpty) return const Center(child: Text("لا توجد ملفات محملة بعد"));
+    return ListView.builder(
+      itemCount: _files.length,
+      itemBuilder: (context, i) {
+        final f = _files[i];
+        final name = f.path.split('/').last;
+        return ListTile(
+          leading: const Icon(Icons.video_library_rounded, color: AppColors.primary),
+          title: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
+          subtitle: Text("${(File(f.path).lengthSync() / (1024 * 1024)).toStringAsFixed(1)} MB"),
+          trailing: PopupMenuButton(
+            itemBuilder: (ctx) => [
+              const PopupMenuItem(value: 'open', child: Text("فتح")),
+              const PopupMenuItem(value: 'share', child: Text("مشاركة")),
+              const PopupMenuItem(value: 'rename', child: Text("إعادة تسمية")),
+              const PopupMenuItem(value: 'delete', child: Text("حذف")),
+            ],
+            onSelected: (val) async {
+              if (val == 'open') OpenFile.open(f.path);
+              if (val == 'share') Share.shareXFiles([XFile(f.path)]);
+              if (val == 'delete') { await f.delete(); loadFiles(); }
+              if (val == 'rename') _showRenameDialog(f);
+            },
+          ),
+          onTap: () => OpenFile.open(f.path),
+        );
+      },
+    );
+  }
+
+  void _showRenameDialog(FileSystemEntity f) {
+    final controller = TextEditingController(text: f.path.split('/').last);
+    showDialog(context: context, builder: (ctx) => AlertDialog(
+      title: const Text("إعادة تسمية"),
+      content: TextField(controller: controller),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("إلغاء")),
+        TextButton(onPressed: () async {
+          final newPath = f.path.replaceFirst(f.path.split('/').last, controller.text);
+          await f.rename(newPath);
+          Navigator.pop(ctx);
+          loadFiles();
+        }, child: const Text("حفظ")),
+      ],
+    ));
+  }
 }
 
+// -----------------------------------------------------------------------------
+// صفحة الإعدادات (SettingsPage)
+// -----------------------------------------------------------------------------
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
   @override
@@ -1116,33 +1013,51 @@ class SettingsPage extends StatefulWidget {
 }
 
 class _SettingsPageState extends State<SettingsPage> {
-  bool _isLocked = false;
+  bool _appLock = false;
+
   @override
-  void initState() { super.initState(); _load(); }
-  Future<void> _load() async {
-    final p = await SharedPreferences.getInstance();
-    setState(() => _isLocked = p.getBool('app_lock') ?? false);
+  void initState() {
+    super.initState();
+    _loadSettings();
   }
+
+  _loadSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() => _appLock = prefs.getBool('app_lock') ?? false);
+  }
+
+  _toggleLock(bool val) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('app_lock', val);
+    setState(() => _appLock = val);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("الإعدادات"), centerTitle: true, backgroundColor: Colors.transparent),
-      body: ListView(padding: const EdgeInsets.all(15), children: [
-        SwitchListTile(title: const Text("قفل التطبيق"), value: _isLocked, onChanged: (v) async {
-          final p = await SharedPreferences.getInstance(); await p.setBool('app_lock', v);
-          setState(() => _isLocked = v);
-        }, secondary: const Icon(Icons.fingerprint)),
-        const Divider(),
-        ListTile(title: const Text("المطور: Radwan Mohamed"), subtitle: const Text("تواصل عبر تليجرام: @Radwan263"), leading: const Icon(Icons.person), onTap: () => launchUrl(Uri.parse("https://t.me/Radwan263"))),
-        const Divider(),
-        ListTile(
-          title: const Text("تقرير صياد الأخطاء"),
-          subtitle: const Text("اضغط هنا لو واجهتك مشكلة تقنية"),
-          leading: const Icon(Icons.bug_report_rounded, color: Colors.orange),
-          onTap: () => ErrorHunter.showLast(context),
-        ),
-      ]),
+      appBar: AppBar(title: const Text("الإعدادات")),
+      body: ListView(
+        children: [
+          ListTile(
+            leading: const Icon(Icons.lock_outline),
+            title: const Text("قفل التطبيق (بصمة/رمز)"),
+            trailing: Switch(value: _appLock, onChanged: _toggleLock),
+          ),
+          const Divider(),
+          ListTile(
+            leading: const Icon(Icons.bug_report_outlined),
+            title: const Text("صياد الأخطاء (Error Hunter)"),
+            subtitle: const Text("عرض آخر الأخطاء المسجلة"),
+            onTap: () => ErrorHunter.showLast(context),
+          ),
+          const Divider(),
+          const ListTile(
+            leading: Icon(Icons.info_outline),
+            title: Text("عن R-Plus"),
+            subtitle: Text("الإصدار 1.1.0 Omni-Sniffer Edition"),
+          ),
+        ],
+      ),
     );
   }
 }
-
