@@ -76,7 +76,13 @@ flutter {
     source '../..'
 }
 
-dependencies {
+    dependencies {
     implementation "org.jetbrains.kotlin:kotlin-stdlib:1.9.24"
     implementation 'androidx.multidex:multidex:2.0.1'
+}
+
+configurations.all {
+    resolutionStrategy {
+        force 'com.arthenica:ffmpeg-kit-https:6.0'
+    }
 }
