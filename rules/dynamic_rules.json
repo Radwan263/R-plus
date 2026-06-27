@@ -1,14 +1,21 @@
 [
   {
     "domainPattern": ".*youtube\\.com.*",
-    "javascriptCode": "console.log('YouTube Scraper Active'); // Add custom YT logic here",
-    "version": 1,
+    "javascriptCode": "if (window.ytInitialPlayerResponse) { const formats = window.ytInitialPlayerResponse.streamingData.adaptiveFormats; window.flutter_inappwebview.callHandler('onMediaFound', JSON.stringify(formats.map(f => ({url: f.url, type: 'youtube_adaptive', quality: f.qualityLabel})))); }",
+    "version": 2,
     "isActive": true,
     "triggerEvents": ["onLoadStop"]
   },
   {
     "domainPattern": ".*facebook\\.com.*",
-    "javascriptCode": "console.log('Facebook Scraper Active');",
+    "javascriptCode": "const videoData = document.querySelector('script[data-testid=\"video_data\"]'); if(videoData) { window.flutter_inappwebview.callHandler('onMediaFound', videoData.innerText); }",
+    "version": 2,
+    "isActive": true,
+    "triggerEvents": ["onLoadStop"]
+  },
+  {
+    "domainPattern": ".*lulu.*",
+    "javascriptCode": "const playerConfig = window.config || window.playerConfig; if(playerConfig && playerConfig.source) { window.flutter_inappwebview.callHandler('onMediaFound', JSON.stringify([{url: playerConfig.source, type: 'hls'}])); }",
     "version": 1,
     "isActive": true,
     "triggerEvents": ["onLoadStop"]

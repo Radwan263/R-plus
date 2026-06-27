@@ -15,15 +15,19 @@ class ScrapingEngine {
 
   Future<void> init() async {
     await _loadLocalRules();
-    _fetchRemoteRules(); // Fetch in background
+    _fetchRemoteRules(); 
   }
 
   Future<void> _loadLocalRules() async {
     final prefs = await SharedPreferences.getInstance();
     final rulesJson = prefs.getString(_rulesKey);
     if (rulesJson != null) {
-      final List<dynamic> decoded = jsonDecode(rulesJson);
-      _rules = decoded.map((item) => ScrapingRule.fromJson(item)).toList();
+      try {
+        final List<dynamic> decoded = jsonDecode(rulesJson);
+        _rules = decoded.map((item) => ScrapingRule.fromJson(item)).toList();
+      } catch (e) {
+        _rules = [];
+      }
     }
   }
 
@@ -34,7 +38,6 @@ class ScrapingEngine {
         final List<dynamic> decoded = jsonDecode(response.body);
         final remoteRules = decoded.map((item) => ScrapingRule.fromJson(item)).toList();
         
-        // Basic versioning check
         if (_rules.isEmpty || remoteRules.first.version > _rules.first.version) {
           _rules = remoteRules;
           final prefs = await SharedPreferences.getInstance();
@@ -42,7 +45,7 @@ class ScrapingEngine {
         }
       }
     } catch (e) {
-      // Silently fail or log to ErrorHunter
+      // Fail silently
     }
   }
 
@@ -50,6 +53,11 @@ class ScrapingEngine {
     if (url == null) return;
     
     final currentUrl = url.toString();
+    
+    // 1. Inject Universal Finder first
+    await controller.evaluateJavascript(source: universalMediaFinderJs);
+
+    // 2. Inject Domain Specific Rules
     for (var rule in _rules) {
       if (rule.isActive && 
           rule.triggerEvents.contains(event) && 
@@ -59,49 +67,99 @@ class ScrapingEngine {
     }
   }
 
-  // Robust JS script to find media sources
+  // Advanced JS script to bypass dynamic tokenization and find hidden streams
   static const String universalMediaFinderJs = """
     (function() {
+      const DEBUG = true;
+      function log(msg) { if(DEBUG) console.log('[OmniSniffer-JS] ' + msg); }
+
       function findMedia() {
         const media = [];
         
-        // 1. Search in standard HTML elements
+        // A. Standard Video/Audio Elements
         document.querySelectorAll('video, audio, source').forEach(el => {
-          if (el.src && el.src.startsWith('http')) {
-            media.push({url: el.src, type: el.tagName.toLowerCase()});
+          const src = el.src || el.getAttribute('src');
+          if (src && src.startsWith('http')) {
+            media.push({url: src, type: el.tagName.toLowerCase(), method: 'DOM_SCAN'});
           }
         });
 
-        // 2. Search for Blob URLs
-        // Note: Intercepting createObjectURL is more complex, 
-        // but we can look for existing blob: urls in src
-        
-        // 3. Search for common window-level variables (stubborn sites)
-        const commonVars = ['playerConfig', 'videoData', 'ytInitialPlayerResponse', '__NEXT_DATA__'];
-        commonVars.forEach(v => {
-          if (window[v]) {
-            // Logic to parse these would be specific to the site rule
+        // B. Intercepting Blob URLs (Complex but effective)
+        // We look for any video element with a blob: src
+        document.querySelectorAll('video').forEach(v => {
+          if(v.src && v.src.startsWith('blob:')) {
+            log('Found Blob URL: ' + v.src);
+            // Blob URLs can't be downloaded directly, but we signal their presence
+            // to trigger more aggressive traffic sniffing.
+            media.push({url: v.src, type: 'blob', method: 'BLOB_DETECT'});
           }
         });
 
-        return JSON.stringify(media);
+        // C. Site-Specific JSON Metadata Extraction
+        // 1. YouTube Initial Player Response
+        if (window.ytInitialPlayerResponse) {
+          try {
+            const streamingData = window.ytInitialPlayerResponse.streamingData;
+            if (streamingData && streamingData.formats) {
+              streamingData.formats.forEach(f => {
+                if(f.url) media.push({url: f.url, type: 'video/youtube', method: 'YT_JSON'});
+              });
+            }
+          } catch(e) {}
+        }
+
+        // 2. Generic JSON-LD or Metadata
+        document.querySelectorAll('script[type="application/ld+json"]').forEach(s => {
+          try {
+            const data = JSON.parse(s.innerText);
+            if(data.contentUrl) media.push({url: data.contentUrl, type: 'json-ld', method: 'LD_JSON'});
+          } catch(e) {}
+        });
+
+        // D. Lulu Video & Custom Players (Looking for window-level variables)
+        const customVars = ['player', 'jwplayer', 'vjs', 'videojs', 'config', 'flashvars'];
+        customVars.forEach(v => {
+          if (window[v] && typeof window[v] === 'object') {
+            // Attempt to stringify and find URLs inside
+            const str = JSON.stringify(window[v]);
+            const m3u8Match = str.match(/https?:\/\/[^"']+\.m3u8[^"']*/);
+            if(m3u8Match) media.push({url: m3u8Match[0], type: 'hls', method: 'VAR_SCAN'});
+          }
+        });
+
+        return media;
       }
-      
-      // Periodically check for dynamic elements
+
+      // Communication with Flutter
+      function reportMedia(mediaList) {
+        if (mediaList.length > 0) {
+          window.flutter_inappwebview.callHandler('onMediaFound', JSON.stringify(mediaList));
+        }
+      }
+
+      // Monitor DOM changes for dynamic players
       const observer = new MutationObserver((mutations) => {
         const found = findMedia();
-        if (found !== '[]') {
-          window.flutter_inappwebview.callHandler('onMediaFound', found);
-        }
+        reportMedia(found);
       });
       
       observer.observe(document.body, { childList: true, subtree: true });
       
-      // Initial check
-      const initialFound = findMedia();
-      if (initialFound !== '[]') {
-        window.flutter_inappwebview.callHandler('onMediaFound', initialFound);
-      }
+      // Initial scan
+      reportMedia(findMedia());
+
+      // E. Hooking into XHR to catch manifests (Advanced)
+      const oldXHR = window.XMLHttpRequest.prototype.open;
+      window.XMLHttpRequest.prototype.open = function() {
+        this.addEventListener('load', function() {
+          const url = this.responseURL;
+          if (url.includes('.m3u8') || url.includes('.mpd') || url.includes('playlist')) {
+            log('XHR Manifest Detected: ' + url);
+            reportMedia([{url: url, type: 'manifest', method: 'XHR_HOOK'}]);
+          }
+        });
+        return oldXHR.apply(this, arguments);
+      };
     })();
   """;
 }
